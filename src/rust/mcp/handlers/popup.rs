@@ -2,13 +2,50 @@ use anyhow::Result;
 use std::process::Command;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+use once_cell::sync::OnceCell;
 
 use crate::mcp::types::PopupRequest;
+use crate::mcp::ws_server::WsServer;
+use crate::log_important;
+
+/// 全局WebSocket服务器实例
+static WS_SERVER: OnceCell<Arc<WsServer>> = OnceCell::new();
+
+/// 设置全局WebSocket服务器实例
+pub fn set_ws_server(server: Arc<WsServer>) {
+    let _ = WS_SERVER.set(server);
+}
 
 /// 创建 Tauri 弹窗
 ///
-/// 优先调用与 MCP 服务器同目录的 UI 命令，找不到时使用全局版本
-pub fn create_tauri_popup(request: &PopupRequest) -> Result<String> {
+/// 优先使用WebSocket推送,失败时fallback到本地进程调用
+pub async fn create_tauri_popup(request: &PopupRequest) -> Result<String> {
+    // 1. 优先尝试WebSocket推送
+    if let Some(ws_server) = WS_SERVER.get() {
+        let has_clients = ws_server.has_clients().await;
+
+        if has_clients {
+            log_important!(info, "使用WebSocket推送弹窗请求");
+            match ws_server.send_popup_request(request).await {
+                Ok(response) => {
+                    log_important!(info, "WebSocket响应成功");
+                    return Ok(response);
+                }
+                Err(e) => {
+                    log_important!(warn, "WebSocket推送失败,fallback到本地进程: {}", e);
+                }
+            }
+        }
+    }
+
+    // 2. Fallback到本地进程调用
+    log_important!(info, "使用本地进程调用弹窗");
+    create_local_popup(request)
+}
+
+/// 本地进程调用弹窗(原有逻辑)
+fn create_local_popup(request: &PopupRequest) -> Result<String> {
     // 创建临时请求文件 - 跨平台适配
     let temp_dir = std::env::temp_dir();
     let temp_file = temp_dir.join(format!("mcp_request_{}.json", request.id));

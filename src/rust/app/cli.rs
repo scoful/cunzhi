@@ -1,5 +1,6 @@
 use crate::config::load_standalone_telegram_config;
 use crate::telegram::handle_telegram_only_mcp_request;
+use crate::ui::run_ws_client;
 use crate::log_important;
 use crate::app::builder::run_tauri_app;
 use anyhow::Result;
@@ -25,10 +26,12 @@ pub fn handle_cli_args() -> Result<()> {
                 }
             }
         }
-        // 多参数：MCP请求模式
+        // 多参数：MCP请求模式或WebSocket客户端模式
         _ => {
             if args[1] == "--mcp-request" && args.len() >= 3 {
                 handle_mcp_request(&args[2])?;
+            } else if args[1] == "--ws-client" && args.len() >= 3 {
+                handle_ws_client(&args[2])?;
             } else {
                 eprintln!("无效的命令行参数");
                 print_help();
@@ -68,15 +71,35 @@ fn handle_mcp_request(request_file: &str) -> Result<()> {
     Ok(())
 }
 
+/// 处理WebSocket客户端模式
+fn handle_ws_client(server_url: &str) -> Result<()> {
+    log_important!(info, "启动WebSocket客户端模式: {}", server_url);
+
+    // 创建tokio runtime并运行WebSocket客户端
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        if let Err(e) = run_ws_client(server_url).await {
+            log_important!(error, "WebSocket客户端失败: {}", e);
+            std::process::exit(1);
+        }
+    });
+
+    Ok(())
+}
+
 /// 显示帮助信息
 fn print_help() {
     println!("寸止 - 智能代码审查工具");
     println!();
     println!("用法:");
-    println!("  等一下                    启动设置界面");
-    println!("  等一下 --mcp-request <文件>  处理 MCP 请求");
-    println!("  等一下 --help             显示此帮助信息");
-    println!("  等一下 --version          显示版本信息");
+    println!("  等一下                          启动设置界面");
+    println!("  等一下 --mcp-request <文件>     处理 MCP 请求");
+    println!("  等一下 --ws-client <服务器URL>  WebSocket客户端模式");
+    println!("  等一下 --help                   显示此帮助信息");
+    println!("  等一下 --version                显示版本信息");
+    println!();
+    println!("示例:");
+    println!("  等一下 --ws-client ws://192.168.1.100:9000");
 }
 
 /// 显示版本信息

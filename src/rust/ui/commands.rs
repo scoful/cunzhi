@@ -530,7 +530,7 @@ pub async fn create_test_popup(request: serde_json::Value) -> Result<String, Str
         .map_err(|e| format!("解析请求参数失败: {}", e))?;
 
     // 调用现有的popup创建函数
-    match create_tauri_popup(&popup_request) {
+    match create_tauri_popup(&popup_request).await {
         Ok(response) => Ok(response),
         Err(e) => Err(format!("创建测试popup失败: {}", e))
     }

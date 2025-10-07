@@ -76,3 +76,5 @@ src-tauri/Cargo.lock
 scripts/
 *.exe
 *.md
+
+*.code-workspace

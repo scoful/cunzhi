@@ -31,8 +31,12 @@ tokio = { version = "1.0", features = [
   "fs", # 文件操作需要
   "process", # Command::new() 需要
   "sync", # oneshot channel 需要
-  "time" # sleep() 需要
+  "time", # sleep() 需要
+  "net" # WebSocket服务器需要
 ] }
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
+once_cell = "1.19"
 anyhow = "1.0"
 thiserror = "1.0"
 uuid = { version = "1.0", features = [ "v4" ] }

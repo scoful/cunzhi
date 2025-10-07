@@ -6,9 +6,12 @@ use rmcp::{
     service::RequestContext,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::tools::{InteractionTool, MemoryTool};
 use super::types::{ZhiRequest, JiyiRequest};
+use super::ws_server::WsServer;
+use super::handlers::set_ws_server;
 use crate::config::load_standalone_config;
 use crate::{log_important, log_debug};
 
@@ -213,12 +216,26 @@ impl ServerHandler for ZhiServer {
 
 /// 启动MCP服务器
 pub async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
-    // 创建并运行服务器
+    // 创建WebSocket服务器
+    let ws_server = Arc::new(WsServer::new());
+
+    // 设置全局WebSocket服务器实例
+    set_ws_server(ws_server.clone());
+
+    // 在后台启动WebSocket服务器
+    let ws_server_clone = ws_server.clone();
+    tokio::spawn(async move {
+        if let Err(e) = ws_server_clone.start().await {
+            log_important!(error, "WebSocket服务器失败: {}", e);
+        }
+    });
+
+    // 创建并运行MCP服务器
     let service = ZhiServer::new()
         .serve(stdio())
         .await
         .inspect_err(|e| {
-            log_important!(error, "启动服务器失败: {}", e);
+            log_important!(error, "启动MCP服务器失败: {}", e);
         })?;
 
     // 等待服务器关闭
