@@ -9,6 +9,26 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 use crate::mcp::types::PopupRequest;
 use crate::log_important;
 
+/// WebSocket服务器配置
+pub struct WsServerConfig {
+    pub host: String,
+    pub port: u16,
+}
+
+impl WsServerConfig {
+    /// 从环境变量加载配置
+    pub fn from_env() -> Self {
+        Self {
+            host: std::env::var("CUNZHI_WS_HOST")
+                .unwrap_or_else(|_| "0.0.0.0".to_string()),
+            port: std::env::var("CUNZHI_WS_PORT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(9000),
+        }
+    }
+}
+
 /// WebSocket客户端连接
 struct WsClient {
     sender: futures_util::stream::SplitSink<
@@ -21,20 +41,22 @@ struct WsClient {
 pub struct WsServer {
     clients: Arc<Mutex<HashMap<String, WsClient>>>,
     pending_requests: Arc<Mutex<HashMap<String, oneshot::Sender<String>>>>,
+    config: WsServerConfig,
 }
 
 impl WsServer {
-    pub fn new() -> Self {
+    pub fn new(config: WsServerConfig) -> Self {
         Self {
             clients: Arc::new(Mutex::new(HashMap::new())),
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
+            config,
         }
     }
 
     /// 启动WebSocket服务器
     pub async fn start(self: Arc<Self>) -> Result<()> {
-        let addr = "0.0.0.0:9000";
-        let listener = TcpListener::bind(addr).await?;
+        let addr = format!("{}:{}", self.config.host, self.config.port);
+        let listener = TcpListener::bind(&addr).await?;
         log_important!(info, "WebSocket服务器启动: {}", addr);
 
         loop {
@@ -148,11 +170,10 @@ impl WsServer {
             }
         }
 
-        // 等待响应(30秒超时)
-        match tokio::time::timeout(tokio::time::Duration::from_secs(30), rx).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => anyhow::bail!("响应通道关闭"),
-            Err(_) => anyhow::bail!("等待响应超时"),
+        // 等待响应(永不超时,依赖断线检测)
+        match rx.await {
+            Ok(response) => Ok(response),
+            Err(_) => anyhow::bail!("响应通道关闭"),
         }
     }
 

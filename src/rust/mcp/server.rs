@@ -216,8 +216,14 @@ impl ServerHandler for ZhiServer {
 
 /// 启动MCP服务器
 pub async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
+    // 从环境变量加载WebSocket配置
+    let ws_config = super::ws_server::WsServerConfig::from_env();
+    log_important!(info, "WebSocket配置: {}:{}, 超时: 永不",
+        ws_config.host, ws_config.port
+    );
+
     // 创建WebSocket服务器
-    let ws_server = Arc::new(WsServer::new());
+    let ws_server = Arc::new(WsServer::new(ws_config));
 
     // 设置全局WebSocket服务器实例
     set_ws_server(ws_server.clone());

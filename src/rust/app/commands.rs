@@ -17,4 +17,5 @@ pub use crate::ui::{
     updater::*,
     exit::*,
     exit_handler::*,
+    websocket_commands::*,
 };

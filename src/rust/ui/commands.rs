@@ -2,6 +2,7 @@ use crate::config::{save_config, load_config, AppState, ReplyConfig, WindowConfi
 use crate::constants::{window, ui, validation};
 use crate::mcp::types::{build_continue_response, build_send_response, ImageAttachment, PopupRequest};
 use crate::mcp::handlers::create_tauri_popup;
+use crate::log_important;
 use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
@@ -391,17 +392,45 @@ pub async fn send_mcp_response(
         std::io::Write::flush(&mut std::io::stdout())
             .map_err(|e| format!("刷新stdout失败: {}", e))?;
     } else {
-        // 通过channel发送响应（如果有的话）
-        let sender = {
-            let mut channel = state
-                .response_channel
-                .lock()
-                .map_err(|e| format!("获取响应通道失败: {}", e))?;
-            channel.take()
-        };
+        // 尝试通过WebSocket发送响应
+        let ws_manager = crate::ui::websocket_commands::get_websocket_manager();
 
-        if let Some(sender) = sender {
-            let _ = sender.send(response_str);
+        if ws_manager.is_connected().await {
+            // 从响应中提取request_id
+            let request_id = response
+                .get("metadata")
+                .and_then(|m| m.get("request_id"))
+                .and_then(|id| id.as_str())
+                .unwrap_or("unknown");
+
+            if let Err(e) = ws_manager.send_response(request_id, &response_str).await {
+                log_important!(warn, "WebSocket发送响应失败: {}", e);
+                // WebSocket发送失败，fallback到channel
+                let sender = {
+                    let mut channel = state
+                        .response_channel
+                        .lock()
+                        .map_err(|e| format!("获取响应通道失败: {}", e))?;
+                    channel.take()
+                };
+
+                if let Some(sender) = sender {
+                    let _ = sender.send(response_str);
+                }
+            }
+        } else {
+            // WebSocket未连接，使用channel发送响应
+            let sender = {
+                let mut channel = state
+                    .response_channel
+                    .lock()
+                    .map_err(|e| format!("获取响应通道失败: {}", e))?;
+                channel.take()
+            };
+
+            if let Some(sender) = sender {
+                let _ = sender.send(response_str);
+            }
         }
     }
 

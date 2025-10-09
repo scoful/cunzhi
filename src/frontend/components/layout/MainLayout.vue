@@ -2,6 +2,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { useMessage } from 'naive-ui'
 import { ref } from 'vue'
+import { useWebSocketStatus } from '../../composables/useWebSocketStatus'
 import IntroTab from '../tabs/IntroTab.vue'
 import McpToolsTab from '../tabs/McpToolsTab.vue'
 import PromptsTab from '../tabs/PromptsTab.vue'
@@ -32,13 +33,18 @@ interface Emits {
 defineProps<Props>()
 const emit = defineEmits<Emits>()
 
+const activeTab = ref('intro')
+const message = useMessage()
+
+// WebSocket状态管理
+const webSocketStatus = useWebSocketStatus()
+
 // 处理配置重新加载事件
 function handleConfigReloaded() {
   emit('configReloaded')
+  // 刷新WebSocket状态
+  webSocketStatus.refresh()
 }
-
-const activeTab = ref('intro')
-const message = useMessage()
 
 // 图标加载错误处理
 function handleImageError(event: Event) {
@@ -124,12 +130,35 @@ function testPopup() {
           </div>
 
           <!-- 服务器状态 -->
-          <div class="mb-4">
+          <div class="mb-4 flex flex-wrap gap-3 justify-center">
+            <!-- MCP服务状态 -->
             <n-tag type="success" size="small" round class="px-3 py-1">
               <template #icon>
                 <div class="w-2 h-2 bg-success rounded-full animate-pulse" />
               </template>
               MCP 服务已启动
+            </n-tag>
+
+            <!-- WebSocket状态 -->
+            <n-tag
+              v-if="webSocketStatus.shouldShow()"
+              :type="webSocketStatus.getStatusType()"
+              size="small"
+              round
+              class="px-3 py-1"
+            >
+              <template #icon>
+                <div
+                  class="w-2 h-2 rounded-full"
+                  :class="{
+                    'bg-success animate-pulse': webSocketStatus.shouldPulse() && webSocketStatus.getStatusType() === 'success',
+                    'bg-warning animate-pulse': webSocketStatus.shouldPulse() && webSocketStatus.getStatusType() === 'warning',
+                    'bg-error': webSocketStatus.getStatusType() === 'error',
+                    'bg-gray-400': webSocketStatus.getStatusType() === 'default',
+                  }"
+                />
+              </template>
+              {{ webSocketStatus.getStatusText() }}
             </n-tag>
           </div>
 
