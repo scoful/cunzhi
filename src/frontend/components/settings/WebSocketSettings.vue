@@ -11,12 +11,17 @@ const localConfig = ref({
   host: '127.0.0.1',
   port: 9000,
   auto_connect: true, // 默认开启
+  api_key: '', // API密钥
 })
 
 // 连接状态
 const connectionStatus = ref('disconnected') // 'disconnected' | 'connecting' | 'connected' | 'error'
 const connectionError = ref('')
 const isConnecting = ref(false)
+
+// API Key 相关状态
+const isGeneratingKey = ref(false)
+const showApiKey = ref(false)
 
 // 计算连接状态显示
 const statusText = computed(() => {
@@ -45,6 +50,22 @@ const statusColor = computed(() => {
   }
 })
 
+// API Key 显示文本（部分遮掩）
+const maskedApiKey = computed(() => {
+  if (!localConfig.value.api_key) {
+    return '未设置'
+  }
+  if (showApiKey.value) {
+    return localConfig.value.api_key
+  }
+  // 显示前8位和后4位，中间用*代替
+  const key = localConfig.value.api_key
+  if (key.length <= 12) {
+    return '*'.repeat(key.length)
+  }
+  return key.substring(0, 8) + '*'.repeat(key.length - 12) + key.substring(key.length - 4)
+})
+
 // 加载WebSocket配置
 async function loadWebSocketConfig() {
   try {
@@ -60,10 +81,7 @@ async function loadWebSocketConfig() {
 async function updateConfig() {
   try {
     await invoke('update_websocket_config', {
-      enabled: localConfig.value.enabled,
-      host: localConfig.value.host,
-      port: localConfig.value.port,
-      autoConnect: localConfig.value.auto_connect,
+      websocketConfig: localConfig.value,
     })
     message.success('WebSocket配置已保存')
   }
@@ -71,6 +89,49 @@ async function updateConfig() {
     console.error('保存WebSocket配置失败:', error)
     message.error('保存WebSocket配置失败')
   }
+}
+
+// 生成新的API Key
+async function generateApiKey() {
+  if (isGeneratingKey.value)
+    return
+
+  try {
+    isGeneratingKey.value = true
+    const newApiKey = await invoke('generate_websocket_api_key')
+    localConfig.value.api_key = newApiKey as string
+    await updateConfig()
+    message.success('API Key已生成并保存')
+  }
+  catch (error) {
+    console.error('生成API Key失败:', error)
+    message.error('生成API Key失败')
+  }
+  finally {
+    isGeneratingKey.value = false
+  }
+}
+
+// 复制API Key到剪贴板
+async function copyApiKey() {
+  if (!localConfig.value.api_key) {
+    message.warning('请先生成API Key')
+    return
+  }
+
+  try {
+    await navigator.clipboard.writeText(localConfig.value.api_key)
+    message.success('API Key已复制到剪贴板')
+  }
+  catch (error) {
+    console.error('复制失败:', error)
+    message.error('复制失败，请手动复制')
+  }
+}
+
+// 切换API Key显示/隐藏
+function toggleApiKeyVisibility() {
+  showApiKey.value = !showApiKey.value
 }
 
 // 切换启用状态
@@ -97,8 +158,8 @@ function updatePort(port: number) {
 }
 
 // 切换自动连接
-function toggleAutoConnect(autoConnect: boolean) {
-  localConfig.value.auto_connect = autoConnect
+function toggleAutoConnect(auto_connect: boolean) {
+  localConfig.value.auto_connect = auto_connect
   updateConfig()
 }
 
@@ -247,6 +308,80 @@ onMounted(async () => {
           size="small"
           @update:value="toggleAutoConnect"
         />
+      </div>
+
+      <!-- API Key 管理 -->
+      <div class="flex items-center justify-between">
+        <div class="flex items-center">
+          <div class="w-1.5 h-1.5 bg-error rounded-full mr-3 flex-shrink-0" />
+          <div>
+            <div class="text-sm font-medium leading-relaxed">
+              API 密钥
+            </div>
+            <div class="text-xs opacity-60">
+              用于WebSocket连接认证的安全密钥
+            </div>
+          </div>
+        </div>
+        <n-space>
+          <n-input
+            :value="maskedApiKey"
+            size="small"
+            readonly
+            :type="showApiKey ? 'text' : 'password'"
+            placeholder="未设置"
+            style="width: 200px"
+          />
+          <n-button
+            size="small"
+            type="default"
+            :disabled="!localConfig.api_key"
+            @click="toggleApiKeyVisibility"
+          >
+            <template #icon>
+              <div :class="showApiKey ? 'i-carbon-view-off' : 'i-carbon-view'" />
+            </template>
+          </n-button>
+          <n-button
+            size="small"
+            type="default"
+            :disabled="!localConfig.api_key"
+            @click="copyApiKey"
+          >
+            <template #icon>
+              <div class="i-carbon-copy" />
+            </template>
+          </n-button>
+          <n-button
+            size="small"
+            type="primary"
+            :loading="isGeneratingKey"
+            @click="generateApiKey"
+          >
+            {{ localConfig.api_key ? '重新生成' : '生成密钥' }}
+          </n-button>
+        </n-space>
+      </div>
+
+      <!-- 环境变量设置提示 -->
+      <div v-if="localConfig.api_key" class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+        <div class="flex items-start">
+          <div class="i-carbon-warning text-yellow-600 dark:text-yellow-400 mt-0.5 mr-2 flex-shrink-0" />
+          <div class="text-xs text-yellow-800 dark:text-yellow-200">
+            <div class="font-medium mb-1">
+              服务端配置说明：
+            </div>
+            <div class="mb-1">
+              请在服务端设置环境变量：
+            </div>
+            <code class="bg-yellow-100 dark:bg-yellow-800 px-2 py-1 rounded text-xs">
+              CUNZHI_WS_API_KEY={{ localConfig.api_key }}
+            </code>
+            <div class="mt-1">
+              然后重启"寸止"服务端使配置生效
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- 连接状态和操作 -->

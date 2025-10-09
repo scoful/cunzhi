@@ -218,8 +218,9 @@ impl ServerHandler for ZhiServer {
 pub async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     // 从环境变量加载WebSocket配置
     let ws_config = super::ws_server::WsServerConfig::from_env();
-    log_important!(info, "WebSocket配置: {}:{}, 超时: 永不",
-        ws_config.host, ws_config.port
+    let auth_status = if ws_config.api_key.is_some() { "已启用" } else { "未启用" };
+    log_important!(info, "WebSocket配置: {}:{}, 认证: {}",
+        ws_config.host, ws_config.port, auth_status
     );
 
     // 创建WebSocket服务器

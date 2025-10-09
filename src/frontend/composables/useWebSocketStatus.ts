@@ -6,6 +6,7 @@ export interface WebSocketConfig {
   host: string
   port: number
   auto_connect: boolean
+  api_key: string
 }
 
 export type WebSocketStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
@@ -19,6 +20,7 @@ export function useWebSocketStatus() {
     host: '127.0.0.1',
     port: 9000,
     auto_connect: true,
+    api_key: '',
   })
 
   const status = ref<WebSocketStatus>('disconnected')

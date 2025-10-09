@@ -1,4 +1,4 @@
-use crate::config::{save_config, AppState};
+use crate::config::{save_config, AppState, WebSocketConfig};
 use crate::mcp::types::PopupRequest;
 use crate::log_important;
 use anyhow::Result;
@@ -8,6 +8,8 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use once_cell::sync::OnceCell;
+use uuid::Uuid;
+use serde_json;
 
 /// WebSocket客户端状态
 #[derive(Debug, Clone)]
@@ -71,7 +73,7 @@ impl WebSocketManager {
         *self.status.lock().await = status;
     }
 
-    pub async fn connect(&self, server_url: String) -> Result<()> {
+    pub async fn connect(&self, server_url: String, api_key: Option<String>) -> Result<()> {
         log_important!(info, "开始连接WebSocket服务器: {}", server_url);
 
         // 先断开现有连接
@@ -87,7 +89,59 @@ impl WebSocketManager {
 
         log_important!(info, "WebSocket连接成功");
 
-        let (write, mut read) = ws_stream.split();
+        let (mut write, mut read) = ws_stream.split();
+
+        // 发送认证消息
+        if let Some(key) = api_key {
+            let auth_message = serde_json::json!({
+                "type": "auth",
+                "api_key": key
+            });
+
+            log_important!(info, "发送认证消息");
+            write.send(Message::Text(auth_message.to_string())).await
+                .map_err(|e| anyhow::anyhow!("发送认证消息失败: {}", e))?;
+
+            // 等待认证响应
+            if let Some(msg) = read.next().await {
+                match msg {
+                    Ok(Message::Text(text)) => {
+                        if let Ok(response) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if let Some(msg_type) = response.get("type").and_then(|v| v.as_str()) {
+                                if msg_type == "auth_response" {
+                                    if let Some(success) = response.get("success").and_then(|v| v.as_bool()) {
+                                        if success {
+                                            log_important!(info, "认证成功");
+                                        } else {
+                                            let error_msg = response.get("message")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("认证失败");
+                                            return Err(anyhow::anyhow!("认证失败: {}", error_msg));
+                                        }
+                                    }
+                                } else if msg_type == "error" {
+                                    let error_msg = response.get("message")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("服务器错误");
+                                    return Err(anyhow::anyhow!("服务器错误: {}", error_msg));
+                                }
+                            }
+                        }
+                    }
+                    Ok(Message::Close(_)) => {
+                        return Err(anyhow::anyhow!("服务器在认证过程中关闭连接"));
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("认证过程中接收消息失败: {}", e));
+                    }
+                    _ => {}
+                }
+            } else {
+                return Err(anyhow::anyhow!("等待认证响应超时"));
+            }
+        } else {
+            return Err(anyhow::anyhow!("未配置API Key，请在WebSocket设置中生成"));
+        }
 
         // 获取AppHandle用于发送事件
         let app_handle = {
@@ -242,10 +296,21 @@ pub fn get_websocket_manager() -> &'static WebSocketManager {
 
 /// 连接WebSocket服务器
 #[tauri::command]
-pub async fn connect_websocket(server_url: String) -> Result<(), String> {
+pub async fn connect_websocket(server_url: String, state: State<'_, AppState>) -> Result<(), String> {
     let manager = get_websocket_manager();
-    
-    match manager.connect(server_url).await {
+
+    // 从配置中获取API Key
+    let api_key = {
+        let config = state.config.lock().map_err(|e| format!("获取配置失败: {}", e))?;
+        let key = config.websocket_config.api_key.clone();
+        if key.is_empty() {
+            None
+        } else {
+            Some(key)
+        }
+    };
+
+    match manager.connect(server_url, api_key).await {
         Ok(_) => Ok(()),
         Err(e) => {
             let error_msg = format!("连接失败: {}", e);
@@ -287,65 +352,88 @@ pub async fn get_websocket_config(state: State<'_, AppState>) -> Result<serde_js
         "host": config.websocket_config.host,
         "port": config.websocket_config.port,
         "auto_connect": config.websocket_config.auto_connect,
+        "api_key": config.websocket_config.api_key,
     }))
 }
 
 /// 更新WebSocket配置
 #[tauri::command]
 pub async fn update_websocket_config(
-    enabled: bool,
-    host: String,
-    port: u16,
-    auto_connect: bool,
+    websocket_config: WebSocketConfig,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
+    log_important!(info, "开始更新WebSocket配置: enabled={}, host={}, port={}, auto_connect={}, api_key_len={}",
+        websocket_config.enabled, websocket_config.host, websocket_config.port, websocket_config.auto_connect, websocket_config.api_key.len());
+
     {
         let mut config = state
             .config
             .lock()
-            .map_err(|e| format!("获取配置失败: {}", e))?;
-        
-        config.websocket_config.enabled = enabled;
-        config.websocket_config.host = host;
-        config.websocket_config.port = port;
-        config.websocket_config.auto_connect = auto_connect;
+            .map_err(|e| {
+                let error_msg = format!("获取配置锁失败: {}", e);
+                log_important!(error, "{}", error_msg);
+                error_msg
+            })?;
+
+        log_important!(info, "成功获取配置锁，开始更新配置");
+        config.websocket_config = websocket_config;
+        log_important!(info, "配置更新完成，开始保存到文件");
     }
-    
+
     // 保存配置到文件
     save_config(&state, &app)
         .await
-        .map_err(|e| format!("保存配置失败: {}", e))?;
-    
-    log_important!(info, "WebSocket配置已更新");
+        .map_err(|e| {
+            let error_msg = format!("保存配置到文件失败: {}", e);
+            log_important!(error, "{}", error_msg);
+            error_msg
+        })?;
+
+    log_important!(info, "WebSocket配置已成功更新并保存");
     Ok(())
 }
 
 /// 初始化WebSocket客户端（如果启用了自动连接）
 pub async fn initialize_websocket_client(state: &State<'_, AppState>) -> Result<()> {
-    let (enabled, host, port, auto_connect) = {
+    let (enabled, host, port, auto_connect, api_key) = {
         let config = state
             .config
             .lock()
             .map_err(|e| anyhow::anyhow!("获取配置失败: {}", e))?;
-        
+
         (
             config.websocket_config.enabled,
             config.websocket_config.host.clone(),
             config.websocket_config.port,
             config.websocket_config.auto_connect,
+            config.websocket_config.api_key.clone(),
         )
     };
-    
+
     if enabled && auto_connect {
         let server_url = format!("ws://{}:{}", host, port);
         log_important!(info, "自动连接WebSocket服务器: {}", server_url);
-        
+
+        let api_key_option = if api_key.is_empty() {
+            None
+        } else {
+            Some(api_key)
+        };
+
         let manager = get_websocket_manager();
-        if let Err(e) = manager.connect(server_url).await {
+        if let Err(e) = manager.connect(server_url, api_key_option).await {
             log_important!(warn, "自动连接WebSocket失败: {}", e);
         }
     }
-    
+
     Ok(())
+}
+
+/// 生成新的API Key
+#[tauri::command]
+pub async fn generate_websocket_api_key() -> Result<String, String> {
+    let api_key = Uuid::new_v4().to_string();
+    log_important!(info, "生成新的WebSocket API Key");
+    Ok(api_key)
 }

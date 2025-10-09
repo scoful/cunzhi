@@ -109,6 +109,7 @@ pub fn build_tauri_app() -> Builder<tauri::Wry> {
             get_websocket_status,
             get_websocket_config,
             update_websocket_config,
+            generate_websocket_api_key,
 
             // 更新命令
             check_for_updates,

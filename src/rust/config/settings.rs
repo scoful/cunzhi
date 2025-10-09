@@ -196,6 +196,8 @@ pub struct WebSocketConfig {
     pub port: u16, // 服务器端口
     #[serde(default = "default_websocket_auto_connect")]
     pub auto_connect: bool, // 启动时自动连接
+    #[serde(default = "default_websocket_api_key")]
+    pub api_key: String, // API密钥，用于WebSocket连接认证
 }
 
 #[derive(Debug)]
@@ -686,6 +688,7 @@ pub fn default_websocket_config() -> WebSocketConfig {
         host: default_websocket_host(),
         port: default_websocket_port(),
         auto_connect: default_websocket_auto_connect(),
+        api_key: default_websocket_api_key(),
     }
 }
 
@@ -703,6 +706,10 @@ pub fn default_websocket_port() -> u16 {
 
 pub fn default_websocket_auto_connect() -> bool {
     true
+}
+
+pub fn default_websocket_api_key() -> String {
+    String::new() // 默认为空，用户需要手动生成
 }
 
 

@@ -8,11 +8,14 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::mcp::types::PopupRequest;
 use crate::log_important;
+use std::time::{Duration, Instant};
+use serde_json::json;
 
 /// WebSocket服务器配置
 pub struct WsServerConfig {
     pub host: String,
     pub port: u16,
+    pub api_key: Option<String>, // API密钥，用于客户端认证
 }
 
 impl WsServerConfig {
@@ -25,8 +28,16 @@ impl WsServerConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(9000),
+            api_key: std::env::var("CUNZHI_WS_API_KEY").ok(),
         }
     }
+}
+
+/// 客户端认证状态
+#[derive(Debug, Clone)]
+enum AuthStatus {
+    Unauthenticated, // 未认证
+    Authenticated,   // 已认证
 }
 
 /// WebSocket客户端连接
@@ -35,6 +46,8 @@ struct WsClient {
         tokio_tungstenite::WebSocketStream<TcpStream>,
         Message,
     >,
+    auth_status: AuthStatus,
+    connect_time: Instant, // 连接时间，用于认证超时
 }
 
 /// WebSocket服务器状态
@@ -82,10 +95,14 @@ impl WsServer {
         let ws_stream = accept_async(stream).await?;
         let (write, mut read) = ws_stream.split();
 
-        // 注册客户端
+        // 注册客户端（初始状态为未认证）
         {
             let mut clients = self.clients.lock().await;
-            clients.insert(client_id.clone(), WsClient { sender: write });
+            clients.insert(client_id.clone(), WsClient {
+                sender: write,
+                auth_status: AuthStatus::Unauthenticated,
+                connect_time: Instant::now(),
+            });
         }
 
         log_important!(info, "客户端已注册: {}", client_id);
@@ -120,11 +137,52 @@ impl WsServer {
     }
 
     /// 处理客户端消息
-    async fn handle_message(&self, _client_id: &str, text: &str) -> Result<()> {
-        let response: serde_json::Value = serde_json::from_str(text)?;
+    async fn handle_message(&self, client_id: &str, text: &str) -> Result<()> {
+        let message: serde_json::Value = serde_json::from_str(text)?;
 
-        // 检查是否为弹窗响应
-        if let Some(request_id) = response.get("request_id").and_then(|v| v.as_str()) {
+        // 检查客户端认证状态
+        let auth_status = {
+            let clients = self.clients.lock().await;
+            if let Some(client) = clients.get(client_id) {
+                client.auth_status.clone()
+            } else {
+                return Ok(()); // 客户端不存在
+            }
+        };
+
+        // 处理认证消息
+        if let Some(msg_type) = message.get("type").and_then(|v| v.as_str()) {
+            if msg_type == "auth" {
+                return self.handle_auth_message(client_id, &message).await;
+            }
+        }
+
+        // 强制要求API Key认证
+        match auth_status {
+            AuthStatus::Unauthenticated => {
+                // 检查认证超时（10秒）
+                let connect_time = {
+                    let clients = self.clients.lock().await;
+                    clients.get(client_id).map(|c| c.connect_time).unwrap_or_else(Instant::now)
+                };
+
+                if connect_time.elapsed() > Duration::from_secs(10) {
+                    log_important!(warn, "客户端认证超时: {}", client_id);
+                    self.send_error_and_disconnect(client_id, "认证超时，连接已断开").await?;
+                    return Ok(());
+                }
+
+                // 未认证，拒绝处理其他消息
+                self.send_error_message(client_id, "请先发送认证消息").await?;
+                return Ok(());
+            }
+            AuthStatus::Authenticated => {
+                // 已认证，继续处理消息
+            }
+        }
+
+        // 处理弹窗响应
+        if let Some(request_id) = message.get("request_id").and_then(|v| v.as_str()) {
             let mut pending = self.pending_requests.lock().await;
             if let Some(sender) = pending.remove(request_id) {
                 let _ = sender.send(text.to_string());
@@ -136,13 +194,23 @@ impl WsServer {
 
     /// 发送弹窗请求到客户端
     pub async fn send_popup_request(&self, request: &PopupRequest) -> Result<String> {
-        // 检查是否有在线客户端
+        // 检查是否有已认证的在线客户端
         let client_id = {
             let clients = self.clients.lock().await;
             if clients.is_empty() {
                 anyhow::bail!("没有在线的WebSocket客户端");
             }
-            clients.keys().next().unwrap().clone()
+
+            // 强制要求认证，只选择已认证的客户端
+            let authenticated_client = clients.iter()
+                .find(|(_, client)| matches!(client.auth_status, AuthStatus::Authenticated))
+                .map(|(id, _)| id.clone());
+
+            if let Some(id) = authenticated_client {
+                id
+            } else {
+                anyhow::bail!("没有已认证的WebSocket客户端");
+            }
         };
 
         // 创建响应通道
@@ -181,6 +249,86 @@ impl WsServer {
     pub async fn has_clients(&self) -> bool {
         let clients = self.clients.lock().await;
         !clients.is_empty()
+    }
+
+    /// 处理认证消息
+    async fn handle_auth_message(&self, client_id: &str, message: &serde_json::Value) -> Result<()> {
+        let received_api_key = message.get("api_key").and_then(|v| v.as_str());
+
+        // 强制要求API Key认证
+        if let Some(expected_api_key) = &self.config.api_key {
+            if let Some(key) = received_api_key {
+                if key == expected_api_key {
+                    // 认证成功
+                    {
+                        let mut clients = self.clients.lock().await;
+                        if let Some(client) = clients.get_mut(client_id) {
+                            client.auth_status = AuthStatus::Authenticated;
+                        }
+                    }
+
+                    log_important!(info, "客户端认证成功: {}", client_id);
+                    self.send_auth_response(client_id, true, "认证成功").await?;
+                } else {
+                    // 认证失败
+                    log_important!(warn, "客户端认证失败，API Key不匹配: {}", client_id);
+                    self.send_error_and_disconnect(client_id, "API Key验证失败").await?;
+                }
+            } else {
+                // 缺少API Key
+                log_important!(warn, "客户端认证失败，缺少API Key: {}", client_id);
+                self.send_error_and_disconnect(client_id, "缺少API Key").await?;
+            }
+        } else {
+            // 服务端未配置API Key，拒绝连接
+            log_important!(warn, "服务端未配置API Key，拒绝客户端连接: {}", client_id);
+            self.send_error_and_disconnect(client_id, "服务端未配置API Key，请设置CUNZHI_WS_API_KEY环境变量").await?;
+        }
+
+        Ok(())
+    }
+
+    /// 发送认证响应
+    async fn send_auth_response(&self, client_id: &str, success: bool, message: &str) -> Result<()> {
+        let response = json!({
+            "type": "auth_response",
+            "success": success,
+            "message": message
+        });
+
+        self.send_message_to_client(client_id, &response.to_string()).await
+    }
+
+    /// 发送错误消息
+    async fn send_error_message(&self, client_id: &str, error: &str) -> Result<()> {
+        let response = json!({
+            "type": "error",
+            "message": error
+        });
+
+        self.send_message_to_client(client_id, &response.to_string()).await
+    }
+
+    /// 发送错误消息并断开连接
+    async fn send_error_and_disconnect(&self, client_id: &str, error: &str) -> Result<()> {
+        self.send_error_message(client_id, error).await?;
+
+        // 移除客户端
+        {
+            let mut clients = self.clients.lock().await;
+            clients.remove(client_id);
+        }
+
+        Ok(())
+    }
+
+    /// 发送消息到指定客户端
+    async fn send_message_to_client(&self, client_id: &str, message: &str) -> Result<()> {
+        let mut clients = self.clients.lock().await;
+        if let Some(client) = clients.get_mut(client_id) {
+            client.sender.send(Message::Text(message.to_string())).await?;
+        }
+        Ok(())
     }
 }
 
