@@ -147,6 +147,9 @@ pub fn build_lian_yi_xia_app() -> Builder<tauri::Wry> {
             reload_servers_from_config,
         ])
         .setup(|app| {
+            // 设置全局AppHandle(用于WebSocket日志事件)
+            cunzhi::lian_yi_xia::set_app_handle(app.handle().clone());
+
             // 加载配置并应用窗口设置
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {

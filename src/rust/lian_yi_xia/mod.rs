@@ -16,6 +16,8 @@ pub use commands::{
     get_all_connection_status,
     reload_servers_from_config,
     get_ws_manager,
+    set_app_handle,
+    get_app_handle,
 };
 pub use types::{
     LianYiXiaState,

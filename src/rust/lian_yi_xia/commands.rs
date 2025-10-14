@@ -10,9 +10,22 @@ use once_cell::sync::OnceCell;
 /// 全局WebSocket管理器
 static WS_MANAGER: OnceCell<LianYiXiaWebSocketManager> = OnceCell::new();
 
+/// 全局AppHandle(用于发送事件到前端)
+static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
+
 /// 获取WebSocket管理器实例（公开给bin使用）
 pub fn get_ws_manager() -> &'static LianYiXiaWebSocketManager {
     WS_MANAGER.get_or_init(|| LianYiXiaWebSocketManager::new())
+}
+
+/// 设置全局AppHandle(在应用启动时调用)
+pub fn set_app_handle(app: AppHandle) {
+    APP_HANDLE.set(app).ok();
+}
+
+/// 获取全局AppHandle
+pub fn get_app_handle() -> Option<&'static AppHandle> {
+    APP_HANDLE.get()
 }
 
 /// 获取连一下应用信息

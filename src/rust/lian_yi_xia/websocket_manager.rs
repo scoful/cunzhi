@@ -8,6 +8,19 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use std::process::Command;
 use std::fs;
+use serde_json::json;
+use tauri::Emitter;
+
+/// 发送WebSocket日志事件到前端
+fn emit_ws_log(server_name: &str, log_type: &str, message: &str) {
+    if let Some(app) = crate::lian_yi_xia::get_app_handle() {
+        let _ = app.emit("ws_log", json!({
+            "type": log_type,
+            "server_name": server_name,
+            "message": message
+        }));
+    }
+}
 
 /// WebSocket连接句柄
 type WsConnection = (
@@ -59,8 +72,15 @@ impl SingleConnection {
         let (ws_stream, _) = match connect_async(&server_url).await {
             Ok(stream) => stream,
             Err(e) => {
-                let error_msg = format!("连接失败: {}", e);
-                log_important!(warn, "[{}] {}", self.config.name, error_msg);
+                // 使用友好的错误提示
+                let error_msg = if let Some(friendly_msg) = Self::get_friendly_error_message(&e) {
+                    friendly_msg
+                } else {
+                    format!("连接失败: {}", e)
+                };
+
+                log_important!(error, "[{}] {}", self.config.name, error_msg);
+                emit_ws_log(&self.config.name, "error", &error_msg);
                 // 连接失败时设置错误状态
                 self.set_status(ConnectionStatus::Error(error_msg.clone())).await;
                 return Err(anyhow::anyhow!(error_msg));
@@ -68,6 +88,7 @@ impl SingleConnection {
         };
 
         log_important!(info, "[{}] WebSocket连接成功", self.config.name);
+        emit_ws_log(&self.config.name, "success", "连接成功");
 
         let (mut write, mut read) = ws_stream.split();
 
@@ -80,11 +101,13 @@ impl SingleConnection {
             if let Err(e) = write.send(Message::Text(auth_msg.to_string())).await {
                 let error_msg = format!("发送认证消息失败: {}", e);
                 log_important!(warn, "[{}] {}", self.config.name, error_msg);
+                emit_ws_log(&self.config.name, "error", &error_msg);
                 // 认证失败时设置错误状态
                 self.set_status(ConnectionStatus::Error(error_msg.clone())).await;
                 return Err(anyhow::anyhow!(error_msg));
             }
             log_important!(info, "[{}] 已发送认证消息", self.config.name);
+            emit_ws_log(&self.config.name, "info", "→ 发送认证消息");
         }
 
         // 启动消息处理任务
@@ -97,19 +120,51 @@ impl SingleConnection {
                     Ok(Message::Text(text)) => {
                         log_important!(info, "[{}] 收到WebSocket消息: {}", server_name, text);
 
+                        // 解析消息类型并记录日志
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if let Some(msg_type) = json.get("type").and_then(|v| v.as_str()) {
+                                match msg_type {
+                                    "auth_response" => {
+                                        let success = json.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                                        if success {
+                                            emit_ws_log(&server_name, "success", "← 认证成功");
+                                        } else {
+                                            emit_ws_log(&server_name, "error", "← 认证失败");
+                                        }
+                                    }
+                                    "popup_request" => {
+                                        emit_ws_log(&server_name, "info", "← 收到弹窗请求");
+                                    }
+                                    _ => {
+                                        emit_ws_log(&server_name, "info", &format!("← 收到消息: {}", msg_type));
+                                    }
+                                }
+                            }
+                        }
+
                         // 处理消息，启动"等一下"实例
                         if let Err(e) = Self::handle_message(&text, &server_name, &connection_arc).await {
                             log_important!(warn, "[{}] 处理WebSocket消息失败: {}", server_name, e);
+                            emit_ws_log(&server_name, "error", &format!("处理消息失败: {}", e));
                         }
                     }
                     Ok(Message::Close(_)) => {
                         log_important!(info, "[{}] WebSocket服务器关闭连接", server_name);
+                        emit_ws_log(&server_name, "info", "连接已关闭");
                         *status_arc.lock().await = ConnectionStatus::Disconnected;
                         break;
                     }
                     Err(e) => {
-                        log_important!(warn, "[{}] WebSocket接收消息失败: {}", server_name, e);
-                        *status_arc.lock().await = ConnectionStatus::Error(format!("接收失败: {}", e));
+                        // 使用友好的错误提示
+                        let error_msg = if let Some(friendly_msg) = Self::get_friendly_error_message(&e) {
+                            friendly_msg
+                        } else {
+                            format!("连接错误: {}", e)
+                        };
+
+                        log_important!(error, "[{}] {}", server_name, error_msg);
+                        emit_ws_log(&server_name, "error", &error_msg);
+                        *status_arc.lock().await = ConnectionStatus::Error(error_msg);
                         break;
                     }
                     _ => {}
@@ -140,6 +195,35 @@ impl SingleConnection {
 
         log_important!(info, "[{}] WebSocket连接已断开", self.config.name);
         Ok(())
+    }
+
+    /// 获取友好的错误提示(包含技术原因)
+    fn get_friendly_error_message(e: &tokio_tungstenite::tungstenite::Error) -> Option<String> {
+        if let tokio_tungstenite::tungstenite::Error::Io(io_err) = e {
+            match io_err.kind() {
+                // 10061 - 连接被拒绝
+                std::io::ErrorKind::ConnectionRefused => {
+                    Some("连接被拒绝,请检查WebSocket配置是否正确".to_string())
+                }
+                // 10054 - 连接被重置
+                std::io::ErrorKind::ConnectionReset => {
+                    Some("连接被重置,远程服务器已断开,请检查".to_string())
+                }
+                // 10053 - 连接被中止
+                std::io::ErrorKind::ConnectionAborted => {
+                    Some("连接被中止,远程服务器已断开,请检查".to_string())
+                }
+                // 109 - 管道断开
+                std::io::ErrorKind::BrokenPipe => {
+                    Some("管道断开,远程服务器已断开,请检查".to_string())
+                }
+                _ => None
+            }
+        } else if matches!(e, tokio_tungstenite::tungstenite::Error::ConnectionClosed) {
+            Some("连接已关闭,远程服务器已断开,请检查".to_string())
+        } else {
+            None
+        }
     }
 
     /// 处理接收到的消息
@@ -188,12 +272,14 @@ impl SingleConnection {
                         match Self::add_request_id_to_response(&response, request_id) {
                             Ok(final_response) => {
                                 // 发送响应回服务器
-                                if let Err(e) = Self::send_response(connection_arc, &final_response).await {
+                                if let Err(e) = Self::send_response(connection_arc, &final_response, server_name).await {
                                     log_important!(warn, "[{}] 发送响应失败: {}", server_name, e);
+                                    emit_ws_log(server_name, "error", &format!("发送响应失败: {}", e));
                                 }
                             }
                             Err(e) => {
                                 log_important!(warn, "[{}] 处理响应失败: {}", server_name, e);
+                                emit_ws_log(server_name, "error", &format!("处理响应失败: {}", e));
                             }
                         }
                     }
@@ -230,14 +316,16 @@ impl SingleConnection {
     /// 发送响应消息到WebSocket服务器
     async fn send_response(
         connection_arc: &Arc<Mutex<Option<WsConnection>>>,
-        response: &str
+        response: &str,
+        server_name: &str
     ) -> Result<()> {
         let mut connection_guard = connection_arc.lock().await;
 
         if let Some((write, _)) = connection_guard.as_mut() {
             let response_msg = Message::Text(response.to_string());
             write.send(response_msg).await?;
-            log_important!(info, "已发送响应到WebSocket服务器: {}", response);
+            log_important!(info, "[{}] 已发送响应到WebSocket服务器: {}", server_name, response);
+            emit_ws_log(server_name, "info", "→ 发送用户响应");
         } else {
             anyhow::bail!("WebSocket连接不可用");
         }

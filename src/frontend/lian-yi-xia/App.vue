@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { defineComponent, h, onMounted, onUnmounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
 
@@ -276,6 +277,12 @@ onMounted(async () => {
     startStatusCheck()
     // 添加启动日志
     addActivityLog('success', '系统', '连一下启动成功')
+
+    // 监听WebSocket日志事件
+    listen('ws_log', (event: any) => {
+      const { type, server_name, message } = event.payload
+      addActivityLog(type, server_name, message)
+    })
   } catch (error) {
     console.error('初始化失败:', error)
     addActivityLog('error', '系统', '初始化失败')

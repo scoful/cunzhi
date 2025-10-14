@@ -20,8 +20,6 @@ export default defineConfig({
     hmr: {
       port: 5179,
     },
-    // 指定开发模式的入口文件
-    open: '/lian-yi-xia.html',
   },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
