@@ -20,16 +20,25 @@ pub struct WsServerConfig {
 
 impl WsServerConfig {
     /// 从环境变量加载配置
-    pub fn from_env() -> Self {
-        Self {
+    /// 只有配置了API Key才返回配置,否则返回None(不启动WebSocket服务器)
+    pub fn from_env() -> Option<Self> {
+        // 检查是否配置了API Key
+        let api_key = std::env::var("CUNZHI_WS_API_KEY").ok();
+
+        if api_key.is_none() {
+            log_important!(info, "未配置CUNZHI_WS_API_KEY,跳过WebSocket服务器启动");
+            return None;
+        }
+
+        Some(Self {
             host: std::env::var("CUNZHI_WS_HOST")
                 .unwrap_or_else(|_| "0.0.0.0".to_string()),
             port: std::env::var("CUNZHI_WS_PORT")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(9000),
-            api_key: std::env::var("CUNZHI_WS_API_KEY").ok(),
-        }
+            api_key,
+        })
     }
 }
 

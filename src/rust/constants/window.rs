@@ -95,3 +95,28 @@ pub fn is_valid_window_size(width: f64, height: f64) -> bool {
 pub fn clamp_window_size(width: f64, height: f64) -> (f64, f64) {
     get_default_constraints().clamp_size(width, height)
 }
+
+// "连一下"窗口相关常量
+/// "连一下"窗口最小宽度 (px)
+pub const LIAN_YI_XIA_MIN_WIDTH: f64 = 600.0;
+
+/// "连一下"窗口最小高度 (px)
+pub const LIAN_YI_XIA_MIN_HEIGHT: f64 = 400.0;
+
+/// "连一下"窗口最大宽度 (px)
+pub const LIAN_YI_XIA_MAX_WIDTH: f64 = 1200.0;
+
+/// "连一下"窗口最大高度 (px)
+pub const LIAN_YI_XIA_MAX_HEIGHT: f64 = 800.0;
+
+/// "连一下"窗口默认宽度 (px)
+pub const LIAN_YI_XIA_DEFAULT_WIDTH: f64 = 800.0;
+
+/// "连一下"窗口默认高度 (px)
+pub const LIAN_YI_XIA_DEFAULT_HEIGHT: f64 = 600.0;
+
+/// "连一下"默认窗口固定模式状态
+pub const LIAN_YI_XIA_DEFAULT_FIXED_MODE: bool = false;
+
+/// "连一下"默认自动调整大小状态
+pub const LIAN_YI_XIA_DEFAULT_AUTO_RESIZE: bool = false;

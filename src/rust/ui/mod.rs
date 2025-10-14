@@ -7,8 +7,6 @@ pub mod updater;
 pub mod exit;
 pub mod window_events;
 pub mod exit_handler;
-pub mod websocket_commands;
-pub mod ws_client;
 
 pub use commands::*;
 pub use window::*;
@@ -18,5 +16,3 @@ pub use updater::*;
 pub use exit::*;
 pub use window_events::*;
 pub use exit_handler::*;
-pub use websocket_commands::*;
-pub use ws_client::*;

@@ -1,6 +1,7 @@
 pub mod app;
 pub mod config;
 pub mod constants;
+pub mod lian_yi_xia;
 pub mod mcp;
 pub mod telegram;
 pub mod ui;

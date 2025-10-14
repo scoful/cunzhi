@@ -19,8 +19,8 @@ pub struct AppConfig {
     pub custom_prompt_config: CustomPromptConfig, // 自定义prompt配置
     #[serde(default = "default_shortcut_config")]
     pub shortcut_config: ShortcutConfig, // 自定义快捷键配置
-    #[serde(default = "default_websocket_config")]
-    pub websocket_config: WebSocketConfig, // WebSocket客户端配置
+    #[serde(default = "default_lian_yi_xia_servers_config")]
+    pub lian_yi_xia_servers_config: LianYiXiaServersConfig, // "连一下"服务器配置
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -186,18 +186,22 @@ pub struct TelegramConfig {
     pub api_base_url: String, // Telegram API基础URL
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct WebSocketConfig {
-    #[serde(default = "default_websocket_enabled")]
-    pub enabled: bool, // 是否启用WebSocket客户端
-    #[serde(default = "default_websocket_host")]
-    pub host: String, // 服务器地址
-    #[serde(default = "default_websocket_port")]
-    pub port: u16, // 服务器端口
-    #[serde(default = "default_websocket_auto_connect")]
-    pub auto_connect: bool, // 启动时自动连接
-    #[serde(default = "default_websocket_api_key")]
-    pub api_key: String, // API密钥，用于WebSocket连接认证
+/// "连一下"WebSocket服务器配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LianYiXiaServerConfig {
+    pub id: String,           // 唯一标识
+    pub name: String,         // 显示名称
+    pub host: String,         // 服务器地址
+    pub port: u16,            // 服务器端口
+    pub api_key: String,      // API密钥
+    pub enabled: bool,        // 是否启用
+    pub auto_connect: bool,   // 是否自动连接
+}
+
+/// "连一下"多服务器配置
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LianYiXiaServersConfig {
+    pub servers: Vec<LianYiXiaServerConfig>,
 }
 
 #[derive(Debug)]
@@ -219,7 +223,7 @@ impl Default for AppConfig {
             telegram_config: default_telegram_config(),
             custom_prompt_config: default_custom_prompt_config(),
             shortcut_config: default_shortcut_config(),
-            websocket_config: default_websocket_config(),
+            lian_yi_xia_servers_config: default_lian_yi_xia_servers_config(),
         }
     }
 }
@@ -682,34 +686,10 @@ pub fn default_shortcuts() -> HashMap<String, ShortcutBinding> {
     shortcuts
 }
 
-pub fn default_websocket_config() -> WebSocketConfig {
-    WebSocketConfig {
-        enabled: default_websocket_enabled(),
-        host: default_websocket_host(),
-        port: default_websocket_port(),
-        auto_connect: default_websocket_auto_connect(),
-        api_key: default_websocket_api_key(),
+pub fn default_lian_yi_xia_servers_config() -> LianYiXiaServersConfig {
+    LianYiXiaServersConfig {
+        servers: Vec::new(),
     }
-}
-
-pub fn default_websocket_enabled() -> bool {
-    false
-}
-
-pub fn default_websocket_host() -> String {
-    "127.0.0.1".to_string()
-}
-
-pub fn default_websocket_port() -> u16 {
-    9000
-}
-
-pub fn default_websocket_auto_connect() -> bool {
-    true
-}
-
-pub fn default_websocket_api_key() -> String {
-    String::new() // 默认为空，用户需要手动生成
 }
 
 

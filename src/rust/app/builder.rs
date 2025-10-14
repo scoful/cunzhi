@@ -103,14 +103,6 @@ pub fn build_tauri_app() -> Builder<tauri::Wry> {
             force_exit_app,
             reset_exit_attempts_cmd,
 
-            // WebSocket命令
-            connect_websocket,
-            disconnect_websocket,
-            get_websocket_status,
-            get_websocket_config,
-            update_websocket_config,
-            generate_websocket_api_key,
-
             // 更新命令
             check_for_updates,
             download_and_install_update,

@@ -10,10 +10,17 @@ path = "src/rust/lib.rs"
 [[bin]]
 name = "等一下"
 path = "src/rust/main.rs"
+required-features = ["deng-yi-xia"]
 
 [[bin]]
 name = "寸止"
 path = "src/rust/bin/mcp_server.rs"
+required-features = ["cun-zhi"]
+
+[[bin]]
+name = "连一下"
+path = "src/rust/bin/lian_yi_xia.rs"
+required-features = ["lian-yi-xia"]
 
 [dependencies]
 tauri = { version = "2.0", features = [
@@ -65,6 +72,9 @@ tauri-build = { version = "2.0", features = [] }
 
 [features]
 default = []
+deng-yi-xia = []
+cun-zhi = []
+lian-yi-xia = []
 
 # 发布版本优化配置
 [profile.release]

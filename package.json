@@ -12,7 +12,11 @@
     "tauri:dev": "cargo tauri dev",
     "tauri:build": "cargo tauri build",
     "test:ui": "cd src/frontend/test && vite",
-    "test:ui:build": "cd src/frontend/test && vite build"
+    "test:ui:build": "cd src/frontend/test && vite build",
+    "dev:lian-yi-xia": "vite --config vite.lian-yi-xia.config.js",
+    "build:lian-yi-xia": "vite build --config vite.lian-yi-xia.config.js",
+    "tauri:dev:lian-yi-xia": "cargo tauri dev --config lian-yi-xia.conf.json -- --bin 连一下",
+    "tauri:build:lian-yi-xia": "cargo tauri build --config lian-yi-xia.conf.json -- --bin 连一下"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.5.0",
