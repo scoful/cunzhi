@@ -294,22 +294,22 @@ onUnmounted(() => {
   stopStatusCheck()
 })
 
-// 加载服务器列表
+// 加载寸止实例列表
 async function loadServers() {
   try {
     const config = await invoke('get_websocket_servers') as WebSocketServersConfig
     servers.value = config.servers
   } catch (error) {
-    console.error('加载服务器列表失败:', error)
-    message?.error('加载服务器列表失败')
+    console.error('加载实例列表失败:', error)
+    message?.error('加载实例列表失败')
   }
 }
 
-// 从配置文件重新加载服务器列表
+// 从配置文件重新加载寸止实例列表
 async function reloadServersFromConfig() {
   try {
     servers.value = await invoke('reload_servers_from_config') as WebSocketServerConfig[]
-    addActivityLog('success', '系统', '已从配置文件重新加载服务器列表')
+    addActivityLog('success', '系统', '已从配置文件重新加载实例列表')
     message?.success('配置已刷新')
     // 刷新后立即检查连接状态
     await checkAllConnectionStatus()
@@ -426,14 +426,14 @@ async function saveServer() {
     showAddDialog.value = false
     await loadServers()
   } catch (error) {
-    console.error('保存服务器失败:', error)
-    const errorMessage = typeof error === 'string' ? error : '保存服务器失败'
+    console.error('保存实例失败:', error)
+    const errorMessage = typeof error === 'string' ? error : '保存实例失败'
     addActivityLog('error', formData.value.name, `保存失败: ${errorMessage}`)
     message?.error(errorMessage)
   }
 }
 
-// 切换服务器启用状态
+// 切换寸止实例启用状态
 async function toggleServerEnabled(server: WebSocketServerConfig) {
   try {
     const newEnabled = !server.enabled
@@ -444,30 +444,30 @@ async function toggleServerEnabled(server: WebSocketServerConfig) {
       },
     })
     const action = newEnabled ? '已启用' : '已禁用'
-    addActivityLog('info', server.name, `服务器${action}`)
-    message?.success(`服务器${action}`)
+    addActivityLog('info', server.name, `实例${action}`)
+    message?.success(`实例${action}`)
     await loadServers()
   } catch (error) {
-    console.error('切换服务器状态失败:', error)
+    console.error('切换实例状态失败:', error)
     addActivityLog('error', server.name, '切换状态失败')
-    message?.error('切换服务器状态失败')
+    message?.error('切换实例状态失败')
   }
 }
 
-// 删除服务器
+// 删除寸止实例
 async function deleteServer(serverId: string) {
   const server = servers.value.find(s => s.id === serverId)
   if (!server) return
 
   try {
     await invoke('delete_websocket_server', { serverId: serverId })
-    addActivityLog('info', server.name, '服务器已删除')
-    message?.success('服务器已删除')
+    addActivityLog('info', server.name, '实例已删除')
+    message?.success('实例已删除')
     await loadServers()
   } catch (error) {
-    console.error('删除服务器失败:', error)
+    console.error('删除实例失败:', error)
     addActivityLog('error', server.name, '删除失败')
-    message?.error('删除服务器失败')
+    message?.error('删除实例失败')
   }
 }
 
@@ -491,28 +491,28 @@ onMounted(() => {
                   {{ appInfo || '连一下 - WebSocket管理器' }}
                 </h1>
                 <p class="text-gray-600">
-                  管理多个WebSocket服务器连接，接收消息并启动"等一下"界面
+                  管理多个“寸止”实例连接，接收消息并启动"等一下"界面
                 </p>
               </div>
 
               <!-- 主要内容区域 -->
               <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <!-- 服务器列表 -->
-                <n-card title="WebSocket服务器" class="h-fit">
+                <!-- 寸止实例列表 -->
+                <n-card title="寸止实例列表" class="h-fit">
                   <template #header-extra>
                     <div class="flex gap-2">
                       <n-button @click="reloadServersFromConfig">
                         刷新配置
                       </n-button>
                       <n-button type="primary" @click="openAddDialog">
-                        添加服务器
+                        添加实例
                       </n-button>
                     </div>
                   </template>
 
                   <div class="space-y-4">
                     <div v-if="servers.length === 0" class="text-center text-gray-500 py-8">
-                      暂无配置的服务器
+                      暂无配置的寸止实例
                     </div>
 
                     <div v-for="server in servers" :key="server.id" class="border rounded-lg p-4">
@@ -644,14 +644,14 @@ onMounted(() => {
               </n-card>
             </div>
 
-            <!-- 添加/编辑服务器对话框 -->
-            <n-modal v-model:show="showAddDialog" preset="dialog" :title="editingServer ? '编辑服务器' : '添加服务器'">
+            <!-- 添加/编辑寸止实例对话框 -->
+            <n-modal v-model:show="showAddDialog" preset="dialog" :title="editingServer ? '编辑实例' : '添加实例'">
               <n-form :model="formData" label-placement="left" label-width="100px">
-                <n-form-item label="服务器名称" required>
-                  <n-input v-model:value="formData.name" placeholder="请输入服务器名称" />
+                <n-form-item label="实例名称" required>
+                  <n-input v-model:value="formData.name" placeholder="请输入实例名称" />
                 </n-form-item>
 
-                <n-form-item label="服务器地址" required>
+                <n-form-item label="实例地址" required>
                   <n-input v-model:value="formData.host" placeholder="127.0.0.1" />
                 </n-form-item>
 

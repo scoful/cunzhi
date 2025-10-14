@@ -76,6 +76,9 @@ src-tauri/Cargo.lock
 scripts/
 *.exe
 *.md
+# 但允许docs目录下的md文件和README.md
+!docs/**/*.md
+!README.md
 
 *.code-workspace
 dist*/
