@@ -33,6 +33,23 @@ pub const MAX_CONCURRENT_CONNECTIONS: usize = 10;
 /// 默认用户代理
 pub const DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
+// WebSocket 心跳和重连相关常量
+
+/// WebSocket 心跳间隔 (秒) - 服务端发送ping的间隔
+pub const WEBSOCKET_PING_INTERVAL_SECS: u64 = 30;
+
+/// WebSocket 客户端ping超时 (秒) - 客户端多久没收到ping就认为断线
+pub const WEBSOCKET_PING_TIMEOUT_SECS: u64 = 60;
+
+/// WebSocket 服务端pong超时 (秒) - 服务端多久没收到pong就清理连接
+pub const WEBSOCKET_PONG_TIMEOUT_SECS: u64 = 90;
+
+/// WebSocket 重连初始延迟 (秒)
+pub const WEBSOCKET_RECONNECT_INITIAL_DELAY_SECS: u64 = 2;
+
+/// WebSocket 重连最大延迟 (秒)
+pub const WEBSOCKET_RECONNECT_MAX_DELAY_SECS: u64 = 60;
+
 // 网络配置结构体
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {

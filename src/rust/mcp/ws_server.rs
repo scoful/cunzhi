@@ -10,6 +10,10 @@ use crate::mcp::types::PopupRequest;
 use crate::log_important;
 use std::time::{Duration, Instant};
 use serde_json::json;
+use crate::constants::network::{
+    WEBSOCKET_PING_INTERVAL_SECS,
+    WEBSOCKET_PONG_TIMEOUT_SECS,
+};
 
 /// WebSocket服务器配置
 pub struct WsServerConfig {
@@ -57,6 +61,7 @@ struct WsClient {
     >,
     auth_status: AuthStatus,
     connect_time: Instant, // 连接时间，用于认证超时
+    last_pong_time: Instant, // 最后收到pong的时间，用于检测僵尸连接
 }
 
 /// WebSocket服务器状态
@@ -80,6 +85,12 @@ impl WsServer {
         let addr = format!("{}:{}", self.config.host, self.config.port);
         let listener = TcpListener::bind(&addr).await?;
         log_important!(info, "WebSocket服务器启动: {}", addr);
+
+        // 启动心跳任务
+        let server_for_heartbeat = self.clone();
+        tokio::spawn(async move {
+            server_for_heartbeat.heartbeat_task().await;
+        });
 
         loop {
             match listener.accept().await {
@@ -107,10 +118,12 @@ impl WsServer {
         // 注册客户端（初始状态为未认证）
         {
             let mut clients = self.clients.lock().await;
+            let now = Instant::now();
             clients.insert(client_id.clone(), WsClient {
                 sender: write,
                 auth_status: AuthStatus::Unauthenticated,
-                connect_time: Instant::now(),
+                connect_time: now,
+                last_pong_time: now,
             });
         }
 
@@ -122,6 +135,13 @@ impl WsServer {
                 Ok(Message::Text(text)) => {
                     if let Err(e) = self.handle_message(&client_id, &text).await {
                         log_important!(warn, "处理消息失败: {}", e);
+                    }
+                }
+                Ok(Message::Pong(_)) => {
+                    // 收到pong响应，更新最后pong时间
+                    let mut clients = self.clients.lock().await;
+                    if let Some(client) = clients.get_mut(&client_id) {
+                        client.last_pong_time = Instant::now();
                     }
                 }
                 Ok(Message::Close(_)) => {
@@ -338,6 +358,43 @@ impl WsServer {
             client.sender.send(Message::Text(message.to_string())).await?;
         }
         Ok(())
+    }
+
+    /// 心跳任务 - 定期发送ping并清理超时连接
+    async fn heartbeat_task(&self) {
+        let ping_interval = Duration::from_secs(WEBSOCKET_PING_INTERVAL_SECS);
+        let pong_timeout = Duration::from_secs(WEBSOCKET_PONG_TIMEOUT_SECS);
+
+        loop {
+            tokio::time::sleep(ping_interval).await;
+
+            let mut clients = self.clients.lock().await;
+            let mut to_remove = Vec::new();
+
+            for (client_id, client) in clients.iter_mut() {
+                // 只对已认证的客户端发送ping
+                if matches!(client.auth_status, AuthStatus::Authenticated) {
+                    // 检查pong超时
+                    if client.last_pong_time.elapsed() > pong_timeout {
+                        log_important!(warn, "客户端pong超时，断开连接: {}", client_id);
+                        to_remove.push(client_id.clone());
+                        continue;
+                    }
+
+                    // 发送ping
+                    if let Err(e) = client.sender.send(Message::Ping(vec![])).await {
+                        log_important!(warn, "发送ping失败，标记断开: {} - {}", client_id, e);
+                        to_remove.push(client_id.clone());
+                    }
+                }
+            }
+
+            // 移除超时或发送失败的客户端
+            for client_id in to_remove {
+                clients.remove(&client_id);
+                log_important!(info, "已清理客户端: {}", client_id);
+            }
+        }
     }
 }
 

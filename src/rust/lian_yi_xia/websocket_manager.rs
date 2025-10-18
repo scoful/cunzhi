@@ -10,6 +10,12 @@ use std::process::Command;
 use std::fs;
 use serde_json::json;
 use tauri::Emitter;
+use std::time::{Duration, Instant};
+use crate::constants::network::{
+    WEBSOCKET_PING_TIMEOUT_SECS,
+    WEBSOCKET_RECONNECT_INITIAL_DELAY_SECS,
+    WEBSOCKET_RECONNECT_MAX_DELAY_SECS,
+};
 
 /// 发送WebSocket日志事件到前端
 fn emit_ws_log(server_name: &str, log_type: &str, message: &str) {
@@ -38,6 +44,8 @@ struct SingleConnection {
     config: WebSocketServerConfig,
     status: Arc<Mutex<ConnectionStatus>>,
     connection: Arc<Mutex<Option<WsConnection>>>,
+    last_ping_time: Arc<Mutex<Instant>>, // 最后收到ping的时间
+    should_reconnect: Arc<Mutex<bool>>, // 是否应该自动重连
 }
 
 impl SingleConnection {
@@ -46,6 +54,8 @@ impl SingleConnection {
             config,
             status: Arc::new(Mutex::new(ConnectionStatus::Disconnected)),
             connection: Arc::new(Mutex::new(None)),
+            last_ping_time: Arc::new(Mutex::new(Instant::now())),
+            should_reconnect: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -110,10 +120,15 @@ impl SingleConnection {
             emit_ws_log(&self.config.name, "info", "→ 发送认证消息");
         }
 
+        // 重置心跳时间并启用自动重连
+        *self.last_ping_time.lock().await = Instant::now();
+        *self.should_reconnect.lock().await = true;
+
         // 启动消息处理任务
         let status_arc = self.status.clone();
         let server_name = self.config.name.clone();
         let connection_arc = self.connection.clone();
+        let last_ping_time_arc = self.last_ping_time.clone();
         let handle = tokio::spawn(async move {
             while let Some(msg) = read.next().await {
                 match msg {
@@ -147,6 +162,10 @@ impl SingleConnection {
                             log_important!(warn, "[{}] 处理WebSocket消息失败: {}", server_name, e);
                             emit_ws_log(&server_name, "error", &format!("处理消息失败: {}", e));
                         }
+                    }
+                    Ok(Message::Ping(_)) => {
+                        // 收到ping，更新最后ping时间
+                        *last_ping_time_arc.lock().await = Instant::now();
                     }
                     Ok(Message::Close(_)) => {
                         log_important!(info, "[{}] WebSocket服务器关闭连接", server_name);
@@ -182,6 +201,9 @@ impl SingleConnection {
     /// 断开连接
     async fn disconnect(&self) -> Result<()> {
         log_important!(info, "[{}] 断开WebSocket连接", self.config.name);
+
+        // 禁用自动重连(手动断开)
+        *self.should_reconnect.lock().await = false;
 
         // 关闭现有连接
         if let Some((mut write, handle)) = self.connection.lock().await.take() {
@@ -433,17 +455,20 @@ impl SingleConnection {
                 .unwrap_or(false)
         }
     }
+
 }
 
 /// "连一下"WebSocket连接管理器
 pub struct LianYiXiaWebSocketManager {
     connections: Arc<Mutex<HashMap<String, SingleConnection>>>,
+    heartbeat_tasks: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>, // 心跳任务句柄
 }
 
 impl LianYiXiaWebSocketManager {
     pub fn new() -> Self {
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
+            heartbeat_tasks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -465,21 +490,27 @@ impl LianYiXiaWebSocketManager {
 
         let connection = SingleConnection::new(config.clone());
 
+        // 添加到连接池
+        self.connections.lock().await.insert(server_id.clone(), connection);
+
         // 如果启用且自动连接，则尝试连接（失败不影响添加）
         if should_connect {
-            if let Err(e) = connection.connect().await {
+            if let Err(e) = self.connect_server(&server_id).await {
                 log::warn!("[{}] 自动连接失败: {}", config.name, e);
             }
         }
-
-        // 添加到连接池
-        self.connections.lock().await.insert(server_id, connection);
 
         Ok(())
     }
 
     /// 移除服务器
     pub async fn remove_server(&self, server_id: &str) -> Result<()> {
+        // 停止心跳任务
+        if let Some(handle) = self.heartbeat_tasks.lock().await.remove(server_id) {
+            handle.abort();
+        }
+
+        // 断开并移除连接
         if let Some(connection) = self.connections.lock().await.remove(server_id) {
             connection.disconnect().await?;
         }
@@ -491,16 +522,27 @@ impl LianYiXiaWebSocketManager {
         let connections = self.connections.lock().await;
         let connection = connections.get(server_id)
             .ok_or_else(|| anyhow::anyhow!("服务器不存在: {}", server_id))?;
-        
-        connection.connect().await
+
+        connection.connect().await?;
+        drop(connections); // 释放锁
+
+        // 启动心跳任务
+        self.start_heartbeat_task(server_id).await;
+
+        Ok(())
     }
 
     /// 断开指定服务器
     pub async fn disconnect_server(&self, server_id: &str) -> Result<()> {
+        // 停止心跳任务
+        if let Some(handle) = self.heartbeat_tasks.lock().await.remove(server_id) {
+            handle.abort();
+        }
+
         let connections = self.connections.lock().await;
         let connection = connections.get(server_id)
             .ok_or_else(|| anyhow::anyhow!("服务器不存在: {}", server_id))?;
-        
+
         connection.disconnect().await
     }
 
@@ -572,6 +614,143 @@ impl LianYiXiaWebSocketManager {
 
         log_important!(info, "所有WebSocket连接已断开");
         Ok(())
+    }
+
+    /// 启动心跳检测和自动重连任务
+    async fn start_heartbeat_task(&self, server_id: &str) {
+        let server_id_owned = server_id.to_string();
+        let server_id_for_task = server_id_owned.clone();
+        let connections = self.connections.clone();
+        let manager = self.clone_for_heartbeat();
+
+        let handle = tokio::spawn(async move {
+            let server_id = server_id_for_task;
+            let ping_timeout = Duration::from_secs(WEBSOCKET_PING_TIMEOUT_SECS);
+            let check_interval = Duration::from_secs(10); // 每10秒检查一次
+
+            loop {
+                tokio::time::sleep(check_interval).await;
+
+                // 获取连接
+                let connections_guard = connections.lock().await;
+                let connection = match connections_guard.get(&server_id) {
+                    Some(conn) => conn,
+                    None => {
+                        log_important!(info, "[{}] 连接已移除，退出心跳任务", server_id);
+                        break;
+                    }
+                };
+
+                // 检查是否应该继续运行
+                if !*connection.should_reconnect.lock().await {
+                    log_important!(info, "[{}] 自动重连已禁用，退出心跳任务", connection.config.name);
+                    break;
+                }
+
+                // 检查当前状态
+                let status = connection.get_status().await;
+                let server_name = connection.config.name.clone();
+
+                drop(connections_guard); // 释放锁
+
+                match status {
+                    ConnectionStatus::Connected => {
+                        // 检查ping超时
+                        let connections_guard = connections.lock().await;
+                        if let Some(connection) = connections_guard.get(&server_id) {
+                            let last_ping = *connection.last_ping_time.lock().await;
+                            if last_ping.elapsed() > ping_timeout {
+                                log_important!(warn, "[{}] 心跳超时，触发重连", server_name);
+                                emit_ws_log(&server_name, "warn", "心跳超时，正在重连...");
+                                drop(connections_guard);
+
+                                // 触发重连
+                                manager.reconnect_with_backoff(&server_id).await;
+                                // 重连成功后继续监控,不退出
+                            }
+                        }
+                    }
+                    ConnectionStatus::Disconnected | ConnectionStatus::Error(_) => {
+                        // 连接断开，触发重连
+                        log_important!(info, "[{}] 检测到断线，触发重连", server_name);
+                        manager.reconnect_with_backoff(&server_id).await;
+                        // 重连成功后继续监控,不退出
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        // 保存任务句柄
+        self.heartbeat_tasks.lock().await.insert(server_id_owned, handle);
+    }
+
+    /// 克隆用于心跳任务
+    fn clone_for_heartbeat(&self) -> Self {
+        Self {
+            connections: self.connections.clone(),
+            heartbeat_tasks: self.heartbeat_tasks.clone(),
+        }
+    }
+
+    /// 带指数退避的重连
+    async fn reconnect_with_backoff(&self, server_id: &str) {
+        let mut delay = WEBSOCKET_RECONNECT_INITIAL_DELAY_SECS;
+        let max_delay = WEBSOCKET_RECONNECT_MAX_DELAY_SECS;
+
+        loop {
+            // 获取连接
+            let connections_guard = self.connections.lock().await;
+            let connection = match connections_guard.get(server_id) {
+                Some(conn) => conn,
+                None => {
+                    log_important!(info, "[{}] 连接已移除，停止重连", server_id);
+                    return;
+                }
+            };
+
+            // 检查是否应该继续重连
+            if !*connection.should_reconnect.lock().await {
+                log_important!(info, "[{}] 自动重连已禁用，停止重连", connection.config.name);
+                return;
+            }
+
+            let server_name = connection.config.name.clone();
+            drop(connections_guard);
+
+            // 尝试重连(直接调用connection.connect,不spawn新任务)
+            log_important!(info, "[{}] 尝试重连...", server_name);
+            emit_ws_log(&server_name, "info", &format!("尝试重连... ({}秒后重试)", delay));
+
+            let connections_guard = self.connections.lock().await;
+            let result = if let Some(connection) = connections_guard.get(server_id) {
+                connection.connect().await
+            } else {
+                log_important!(info, "[{}] 连接已移除，停止重连", server_id);
+                return;
+            };
+            drop(connections_guard);
+
+            match result {
+                Ok(_) => {
+                    log_important!(info, "[{}] 重连成功", server_name);
+                    emit_ws_log(&server_name, "success", "重连成功");
+
+                    // 重连成功,返回让心跳任务继续监控
+                    return;
+                }
+                Err(e) => {
+                    log_important!(warn, "[{}] 重连失败: {}, {}秒后重试", server_name, e, delay);
+                    emit_ws_log(&server_name, "warn", &format!("重连失败，{}秒后重试", delay));
+
+                    // 等待后重试
+                    tokio::time::sleep(Duration::from_secs(delay)).await;
+
+                    // 指数退避，但不超过最大延迟
+                    delay = (delay * 2).min(max_delay);
+                }
+            }
+        }
     }
 }
 
