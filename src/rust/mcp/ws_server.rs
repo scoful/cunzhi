@@ -374,16 +374,16 @@ impl WsServer {
             for (client_id, client) in clients.iter_mut() {
                 // 只对已认证的客户端发送ping
                 if matches!(client.auth_status, AuthStatus::Authenticated) {
-                    // 检查pong超时
-                    if client.last_pong_time.elapsed() > pong_timeout {
-                        log_important!(warn, "客户端pong超时，断开连接: {}", client_id);
+                    // 先发送ping
+                    if let Err(e) = client.sender.send(Message::Ping(vec![])).await {
+                        log_important!(warn, "发送ping失败，标记断开: {} - {}", client_id, e);
                         to_remove.push(client_id.clone());
                         continue;
                     }
 
-                    // 发送ping
-                    if let Err(e) = client.sender.send(Message::Ping(vec![])).await {
-                        log_important!(warn, "发送ping失败，标记断开: {} - {}", client_id, e);
+                    // 再检查上一轮的pong超时
+                    if client.last_pong_time.elapsed() > pong_timeout {
+                        log_important!(warn, "客户端pong超时，断开连接: {}", client_id);
                         to_remove.push(client_id.clone());
                     }
                 }
