@@ -71,7 +71,7 @@ impl LianYiXiaWsServer {
 
     /// 启动WebSocket服务器
     pub async fn start(self: Arc<Self>) -> Result<()> {
-        let addr = format!("127.0.0.1:{}", self.port);
+        let addr = format!("[::]:{}", self.port);
 
         // 尝试绑定端口
         let listener = match TcpListener::bind(&addr).await {
@@ -306,7 +306,7 @@ impl LianYiXiaWsServer {
             ServerStatus::Error(e) => format!("error: {}", e),
         };
 
-        let addr = format!("127.0.0.1:{}", self.port);
+        let addr = format!("0.0.0.0:{} (IPv4+IPv6)", self.port);
 
         let uptime = if let Some(start) = *start_time {
             let duration = start.elapsed();
