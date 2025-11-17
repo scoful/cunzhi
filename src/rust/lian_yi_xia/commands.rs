@@ -1,21 +1,44 @@
-use crate::lian_yi_xia::types::{ConnectionStatus, LianYiXiaState, WebSocketServerConfig, WebSocketServersConfig};
-use crate::lian_yi_xia::websocket_manager::LianYiXiaWebSocketManager;
+use crate::lian_yi_xia::ws_server::LianYiXiaWsServer;
+use crate::lian_yi_xia::ssh_tunnel_manager::{SshTunnelManager, TunnelStatus};
 use crate::log_important;
-use crate::config::{AppState, storage::{save_config, load_config}, settings::LianYiXiaServerConfig};
-use tauri::{State, AppHandle};
-use uuid::Uuid;
-use std::collections::HashMap;
+use crate::config::{AppState, storage::save_config, settings::SshTunnelConfig};
+use tauri::{State, AppHandle, Manager};
+use std::sync::Arc;
 use once_cell::sync::OnceCell;
 
-/// 全局WebSocket管理器
-static WS_MANAGER: OnceCell<LianYiXiaWebSocketManager> = OnceCell::new();
+/// 获取应用信息
+#[tauri::command]
+pub fn get_lian_yi_xia_app_info() -> String {
+    format!("连一下 v{}", env!("CARGO_PKG_VERSION"))
+}
+
+/// 全局WebSocket服务器(新架构)
+static WS_SERVER: OnceCell<Arc<LianYiXiaWsServer>> = OnceCell::new();
+
+/// 全局SSH隧道管理器(新架构)
+static SSH_TUNNEL_MANAGER: OnceCell<Arc<SshTunnelManager>> = OnceCell::new();
 
 /// 全局AppHandle(用于发送事件到前端)
 static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 
-/// 获取WebSocket管理器实例（公开给bin使用）
-pub fn get_ws_manager() -> &'static LianYiXiaWebSocketManager {
-    WS_MANAGER.get_or_init(|| LianYiXiaWebSocketManager::new())
+/// 设置全局WebSocket服务器实例(新架构)
+pub fn set_ws_server(server: Arc<LianYiXiaWsServer>) {
+    WS_SERVER.set(server).ok();
+}
+
+/// 获取全局WebSocket服务器实例(新架构)
+pub fn get_ws_server() -> Option<&'static Arc<LianYiXiaWsServer>> {
+    WS_SERVER.get()
+}
+
+/// 设置全局SSH隧道管理器实例(新架构)
+pub fn set_ssh_tunnel_manager(manager: Arc<SshTunnelManager>) {
+    SSH_TUNNEL_MANAGER.set(manager).ok();
+}
+
+/// 获取全局SSH隧道管理器实例(新架构)
+pub fn get_ssh_tunnel_manager() -> Option<&'static Arc<SshTunnelManager>> {
+    SSH_TUNNEL_MANAGER.get()
 }
 
 /// 设置全局AppHandle(在应用启动时调用)
@@ -28,273 +51,252 @@ pub fn get_app_handle() -> Option<&'static AppHandle> {
     APP_HANDLE.get()
 }
 
-/// 获取连一下应用信息
-#[tauri::command]
-pub async fn get_lian_yi_xia_app_info() -> Result<String, String> {
-    Ok(format!("连一下 v{}", env!("CARGO_PKG_VERSION")))
+// ============ 新架构命令 ============
+
+/// 客户端信息
+#[derive(serde::Serialize)]
+pub struct ConnectedClient {
+    pub client_id: String,
+    pub connected_at: String,
 }
 
-/// 获取所有WebSocket服务器配置
-#[tauri::command]
-pub async fn get_websocket_servers(state: State<'_, LianYiXiaState>) -> Result<WebSocketServersConfig, String> {
-    let config = state.servers_config.lock()
-        .map_err(|e| format!("获取配置失败: {}", e))?;
-    Ok(config.clone())
+/// WebSocket服务器状态信息
+#[derive(serde::Serialize)]
+pub struct WsServerStatus {
+    pub status: String,
+    pub address: String,
+    pub uptime: String,
+    pub client_count: usize,
 }
 
-/// 添加WebSocket服务器配置
+/// 获取已连接的客户端列表
 #[tauri::command]
-pub async fn add_websocket_server(
-    name: String,
-    host: String,
-    port: u16,
-    api_key: String,
-    enabled: bool,
-    auto_connect: bool,
-    lian_yi_xia_state: State<'_, LianYiXiaState>,
-    app_state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<String, String> {
-    // 检查IP+端口的唯一性
-    {
-        let config = lian_yi_xia_state.servers_config.lock()
-            .map_err(|e| format!("获取配置失败: {}", e))?;
+pub async fn get_connected_clients() -> Result<Vec<ConnectedClient>, String> {
+    let server = get_ws_server()
+        .ok_or_else(|| "WebSocket服务器未启动".to_string())?;
 
-        if config.servers.iter().any(|s| s.host == host && s.port == port) {
-            return Err(format!("服务器 {}:{} 已存在", host, port));
-        }
-    }
+    let clients = server.get_connected_clients().await;
 
-    let server_id = Uuid::new_v4().to_string();
-    let server_config = WebSocketServerConfig {
-        id: server_id.clone(),
-        name: name.clone(),
-        host: host.clone(),
-        port,
-        api_key: api_key.clone(),
-        enabled,
-        auto_connect,
-    };
+    let result = clients.into_iter().map(|(client_id, connected_at)| {
+        // 计算连接时长
+        let duration = connected_at.elapsed();
+        let total_secs = duration.as_secs();
+        let hours = total_secs / 3600;
+        let minutes = (total_secs % 3600) / 60;
+        let seconds = total_secs % 60;
 
-    // 更新运行时状态
-    {
-        let mut config = lian_yi_xia_state.servers_config.lock()
-            .map_err(|e| format!("获取配置失败: {}", e))?;
-        config.servers.push(server_config.clone());
-    }
-
-    // 添加到WebSocket管理器
-    let manager = get_ws_manager();
-    manager.add_server(server_config).await
-        .map_err(|e| format!("添加服务器到管理器失败: {}", e))?;
-
-    // 保存到配置文件
-    {
-        let mut config = app_state.config.lock()
-            .map_err(|e| format!("获取配置失败: {}", e))?;
-        config.lian_yi_xia_servers_config.servers.push(LianYiXiaServerConfig {
-            id: server_id.clone(),
-            name,
-            host,
-            port,
-            api_key,
-            enabled,
-            auto_connect,
-        });
-    }
-
-    save_config(&app_state, &app).await
-        .map_err(|e| format!("保存配置失败: {}", e))?;
-
-    log_important!(info, "添加WebSocket服务器配置: {}", server_id);
-    Ok(server_id)
-}
-
-/// 更新WebSocket服务器配置
-#[tauri::command]
-pub async fn update_websocket_server(
-    server_config: WebSocketServerConfig,
-    lian_yi_xia_state: State<'_, LianYiXiaState>,
-    app_state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
-    // 检查IP+端口的唯一性（排除当前服务器）
-    {
-        let config = lian_yi_xia_state.servers_config.lock()
-            .map_err(|e| format!("获取配置失败: {}", e))?;
-
-        if config.servers.iter().any(|s|
-            s.id != server_config.id &&
-            s.host == server_config.host &&
-            s.port == server_config.port
-        ) {
-            return Err(format!("服务器 {}:{} 已存在", server_config.host, server_config.port));
-        }
-    }
-
-    // 更新运行时状态
-    {
-        let mut config = lian_yi_xia_state.servers_config.lock()
-            .map_err(|e| format!("获取配置失败: {}", e))?;
-
-        if let Some(server) = config.servers.iter_mut().find(|s| s.id == server_config.id) {
-            *server = server_config.clone();
+        let connected_time = if hours > 0 {
+            format!("{}小时{}分钟", hours, minutes)
+        } else if minutes > 0 {
+            format!("{}分钟{}秒", minutes, seconds)
         } else {
-            return Err(format!("未找到ID为 {} 的服务器", server_config.id));
-        }
-    }
+            format!("{}秒", seconds)
+        };
 
-    // 更新WebSocket管理器
-    let manager = get_ws_manager();
-    manager.update_server(server_config.clone()).await
-        .map_err(|e| format!("更新服务器管理器失败: {}", e))?;
-
-    // 保存到配置文件
-    {
-        let mut config = app_state.config.lock()
-            .map_err(|e| format!("获取配置失败: {}", e))?;
-
-        if let Some(server) = config.lian_yi_xia_servers_config.servers.iter_mut().find(|s| s.id == server_config.id) {
-            server.name = server_config.name;
-            server.host = server_config.host;
-            server.port = server_config.port;
-            server.api_key = server_config.api_key;
-            server.enabled = server_config.enabled;
-            server.auto_connect = server_config.auto_connect;
-        } else {
-            return Err(format!("未找到ID为 {} 的服务器", server_config.id));
-        }
-    }
-
-    save_config(&app_state, &app).await
-        .map_err(|e| format!("保存配置失败: {}", e))?;
-
-    log_important!(info, "更新WebSocket服务器配置: {}", server_config.id);
-    Ok(())
-}
-
-/// 删除WebSocket服务器配置
-#[tauri::command]
-pub async fn delete_websocket_server(
-    server_id: String,
-    lian_yi_xia_state: State<'_, LianYiXiaState>,
-    app_state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
-    // 从WebSocket管理器移除
-    let manager = get_ws_manager();
-    manager.remove_server(&server_id).await
-        .map_err(|e| format!("从管理器移除服务器失败: {}", e))?;
-
-    // 更新运行时状态
-    {
-        let mut config = lian_yi_xia_state.servers_config.lock()
-            .map_err(|e| format!("获取配置失败: {}", e))?;
-
-        let initial_len = config.servers.len();
-        config.servers.retain(|s| s.id != server_id);
-
-        if config.servers.len() == initial_len {
-            return Err(format!("未找到ID为 {} 的服务器", server_id));
-        }
-    }
-
-    // 保存到配置文件
-    {
-        let mut config = app_state.config.lock()
-            .map_err(|e| format!("获取配置失败: {}", e))?;
-
-        config.lian_yi_xia_servers_config.servers.retain(|s| s.id != server_id);
-    }
-
-    save_config(&app_state, &app).await
-        .map_err(|e| format!("保存配置失败: {}", e))?;
-
-    log_important!(info, "删除WebSocket服务器配置: {}", server_id);
-    Ok(())
-}
-
-/// 生成新的API Key
-#[tauri::command]
-pub async fn generate_api_key() -> Result<String, String> {
-    let api_key = Uuid::new_v4().to_string();
-    log_important!(info, "生成新的API Key");
-    Ok(api_key)
-}
-
-/// 连接到指定WebSocket服务器
-#[tauri::command]
-pub async fn connect_to_server(server_id: String) -> Result<(), String> {
-    let manager = get_ws_manager();
-    manager.connect_server(&server_id).await
-        .map_err(|e| e.to_string())
-}
-
-/// 断开指定WebSocket服务器
-#[tauri::command]
-pub async fn disconnect_from_server(server_id: String) -> Result<(), String> {
-    let manager = get_ws_manager();
-    manager.disconnect_server(&server_id).await
-        .map_err(|e| e.to_string())
-}
-
-/// 获取指定服务器的连接状态
-#[tauri::command]
-pub async fn get_server_connection_status(server_id: String) -> Result<ConnectionStatus, String> {
-    let manager = get_ws_manager();
-    manager.get_server_status(&server_id).await
-        .map_err(|e| format!("获取状态失败: {}", e))
-}
-
-/// 获取所有服务器的连接状态
-#[tauri::command]
-pub async fn get_all_connection_status() -> Result<HashMap<String, ConnectionStatus>, String> {
-    let manager = get_ws_manager();
-    Ok(manager.get_all_status().await)
-}
-
-/// 从配置文件重新加载服务器配置
-#[tauri::command]
-pub async fn reload_servers_from_config(
-    app_state: State<'_, AppState>,
-    lian_yi_xia_state: State<'_, LianYiXiaState>,
-    app: AppHandle,
-) -> Result<Vec<WebSocketServerConfig>, String> {
-    log_important!(info, "开始从配置文件重新加载服务器配置");
-
-    // 先从磁盘重新加载配置文件到内存
-    load_config(&app_state, &app)
-        .await
-        .map_err(|e| format!("重新加载配置文件失败: {}", e))?;
-
-    // 从配置文件读取
-    let config_servers = {
-        let config = app_state.config.lock()
-            .map_err(|e| format!("获取配置失败: {}", e))?;
-        config.lian_yi_xia_servers_config.servers.clone()
-    };
-
-    // 转换为运行时配置
-    let runtime_servers: Vec<WebSocketServerConfig> = config_servers.iter().map(|s| {
-        WebSocketServerConfig {
-            id: s.id.clone(),
-            name: s.name.clone(),
-            host: s.host.clone(),
-            port: s.port,
-            api_key: s.api_key.clone(),
-            enabled: s.enabled,
-            auto_connect: s.auto_connect,
+        ConnectedClient {
+            client_id,
+            connected_at: connected_time,
         }
     }).collect();
 
-    // 更新运行时状态
-    {
-        let mut lian_yi_xia_config = lian_yi_xia_state.servers_config.lock()
-            .map_err(|e| format!("获取运行时配置失败: {}", e))?;
-        lian_yi_xia_config.servers = runtime_servers.clone();
+    Ok(result)
+}
+
+/// 获取WebSocket服务器状态
+#[tauri::command]
+pub async fn get_ws_server_status() -> Result<WsServerStatus, String> {
+    let server = get_ws_server()
+        .ok_or_else(|| "WebSocket服务器未启动".to_string())?;
+
+    let (status, address, uptime, client_count) = server.get_status_info().await;
+
+    Ok(WsServerStatus {
+        status,
+        address,
+        uptime,
+        client_count,
+    })
+}
+
+/// 获取WebSocket服务器端口
+#[tauri::command]
+pub async fn get_ws_server_port() -> Result<u16, String> {
+    // 从配置文件读取
+    let app = get_app_handle()
+        .ok_or_else(|| "应用未初始化".to_string())?;
+
+    let app_state: State<AppState> = app.state();
+    let config = app_state.config.lock()
+        .map_err(|e| format!("获取配置失败: {}", e))?;
+
+    Ok(config.lian_yi_xia_config.port)
+}
+
+/// 保存WebSocket服务器端口
+#[tauri::command]
+pub async fn save_ws_server_port(port: u16) -> Result<(), String> {
+    log_important!(info, "保存WebSocket服务器端口: {}", port);
+
+    // 验证端口范围
+    if port == 0 {
+        return Err("端口不能为0".to_string());
     }
 
-    log_important!(info, "已重新加载 {} 个服务器配置", runtime_servers.len());
+    let app = get_app_handle()
+        .ok_or_else(|| "应用未初始化".to_string())?;
 
-    Ok(runtime_servers)
+    let app_state: State<AppState> = app.state();
+
+    // 更新配置
+    {
+        let mut config = app_state.config.lock()
+            .map_err(|e| format!("获取配置失败: {}", e))?;
+
+        config.lian_yi_xia_config.port = port;
+    }
+
+    // 保存到文件
+    save_config(&app_state, &app).await
+        .map_err(|e| format!("保存配置失败: {}", e))?;
+
+    // 更新SSH隧道管理器的端口
+    if let Some(ssh_manager) = get_ssh_tunnel_manager() {
+        ssh_manager.update_port(port).await;
+    }
+
+    log_important!(info, "WebSocket服务器端口已更新为: {},需要重启应用才能生效", port);
+    Ok(())
+}
+
+// ============ SSH隧道管理命令 ============
+
+/// 获取SSH隧道配置
+#[tauri::command]
+pub async fn get_ssh_tunnel_config(app: AppHandle) -> Result<Option<SshTunnelConfig>, String> {
+    let app_state: State<AppState> = app.state();
+    let config = app_state.config.lock()
+        .map_err(|e| format!("获取配置失败: {}", e))?;
+
+    Ok(config.lian_yi_xia_config.ssh_tunnel.clone())
+}
+
+/// 更新SSH隧道配置
+#[tauri::command]
+pub async fn update_ssh_tunnel_config(
+    app: AppHandle,
+    ssh_config: Option<SshTunnelConfig>,
+) -> Result<(), String> {
+    // 更新配置文件
+    {
+        let app_state: State<AppState> = app.state();
+        let mut config = app_state.config.lock()
+            .map_err(|e| format!("获取配置失败: {}", e))?;
+
+        config.lian_yi_xia_config.ssh_tunnel = ssh_config.clone();
+    }
+
+    // 保存配置
+    let app_state: State<AppState> = app.state();
+    save_config(&app_state, &app).await
+        .map_err(|e| format!("保存配置失败: {}", e))?;
+
+    // 更新SSH隧道管理器配置
+    if let Some(manager) = get_ssh_tunnel_manager() {
+        manager.update_config(ssh_config).await;
+    }
+
+    log_important!(info, "SSH隧道配置已更新");
+    Ok(())
+}
+
+/// 更新WebSocket服务器端口
+#[tauri::command]
+pub async fn update_ws_server_port(
+    app: AppHandle,
+    port: u16,
+) -> Result<(), String> {
+    // 更新配置文件
+    {
+        let app_state: State<AppState> = app.state();
+        let mut config = app_state.config.lock()
+            .map_err(|e| format!("获取配置失败: {}", e))?;
+
+        config.lian_yi_xia_config.port = port;
+    }
+
+    // 保存配置
+    let app_state: State<AppState> = app.state();
+    save_config(&app_state, &app).await
+        .map_err(|e| format!("保存配置失败: {}", e))?;
+
+    // 更新SSH隧道管理器端口
+    if let Some(manager) = get_ssh_tunnel_manager() {
+        manager.update_port(port).await;
+    }
+
+    log_important!(info, "WebSocket服务器端口已更新: {}", port);
+    Ok(())
+}
+
+/// 启动SSH隧道
+#[tauri::command]
+pub async fn start_ssh_tunnel() -> Result<(), String> {
+    let manager = get_ssh_tunnel_manager()
+        .ok_or_else(|| "SSH隧道管理器未初始化".to_string())?;
+
+    manager.start().await
+        .map_err(|e| format!("启动SSH隧道失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 停止SSH隧道
+#[tauri::command]
+pub async fn stop_ssh_tunnel() -> Result<(), String> {
+    let manager = get_ssh_tunnel_manager()
+        .ok_or_else(|| "SSH隧道管理器未初始化".to_string())?;
+
+    manager.stop().await
+        .map_err(|e| format!("停止SSH隧道失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 重启SSH隧道
+#[tauri::command]
+pub async fn restart_ssh_tunnel() -> Result<(), String> {
+    let manager = get_ssh_tunnel_manager()
+        .ok_or_else(|| "SSH隧道管理器未初始化".to_string())?;
+
+    manager.restart().await
+        .map_err(|e| format!("重启SSH隧道失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 获取SSH隧道状态
+#[tauri::command]
+pub async fn get_ssh_tunnel_status() -> Result<String, String> {
+    let manager = get_ssh_tunnel_manager()
+        .ok_or_else(|| "SSH隧道管理器未初始化".to_string())?;
+
+    let status = manager.get_status().await;
+
+    let status_str = match status {
+        TunnelStatus::Stopped => "stopped",
+        TunnelStatus::Starting => "starting",
+        TunnelStatus::Running => "running",
+        TunnelStatus::Error(_) => "error",
+    };
+
+    Ok(status_str.to_string())
+}
+
+/// 获取SSH隧道命令字符串
+#[tauri::command]
+pub async fn get_ssh_tunnel_command() -> Result<Option<String>, String> {
+    let manager = get_ssh_tunnel_manager()
+        .ok_or_else(|| "SSH隧道管理器未初始化".to_string())?;
+
+    Ok(manager.get_command_string().await)
 }

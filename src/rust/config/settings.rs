@@ -20,7 +20,9 @@ pub struct AppConfig {
     #[serde(default = "default_shortcut_config")]
     pub shortcut_config: ShortcutConfig, // 自定义快捷键配置
     #[serde(default = "default_lian_yi_xia_servers_config")]
-    pub lian_yi_xia_servers_config: LianYiXiaServersConfig, // "连一下"服务器配置
+    pub lian_yi_xia_servers_config: LianYiXiaServersConfig, // "连一下"服务器配置(旧架构)
+    #[serde(default = "default_lian_yi_xia_config")]
+    pub lian_yi_xia_config: LianYiXiaConfig, // "连一下"应用配置(新架构)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -204,6 +206,34 @@ pub struct LianYiXiaServersConfig {
     pub servers: Vec<LianYiXiaServerConfig>,
 }
 
+/// "连一下"应用配置 (新架构)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LianYiXiaConfig {
+    #[serde(default = "default_lian_yi_xia_port")]
+    pub port: u16,  // WebSocket服务器端口,默认9000
+    #[serde(default)]
+    pub ssh_tunnel: Option<SshTunnelConfig>,  // SSH隧道配置(可选)
+}
+
+/// SSH隧道配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshTunnelConfig {
+    #[serde(default)]
+    pub enabled: bool,  // 是否启用SSH隧道
+    #[serde(default)]
+    pub remote_host: String,  // 远程主机 (如"prod.example.com")
+    #[serde(default)]
+    pub remote_user: String,  // 远程用户 (如"ubuntu")
+    #[serde(default)]
+    pub ssh_key_path: Option<String>,  // SSH密钥路径(可选)
+    #[serde(default)]
+    pub remote_port: u16,  // 远程端口 (远程服务器监听的端口)
+    #[serde(default)]
+    pub auto_start: bool,  // 是否自动启动
+    #[serde(default)]
+    pub verbose_level: u8,  // SSH详细输出级别: 0=关闭, 1=-vvv
+}
+
 #[derive(Debug)]
 pub struct AppState {
     pub config: Mutex<AppConfig>,
@@ -224,6 +254,7 @@ impl Default for AppConfig {
             custom_prompt_config: default_custom_prompt_config(),
             shortcut_config: default_shortcut_config(),
             lian_yi_xia_servers_config: default_lian_yi_xia_servers_config(),
+            lian_yi_xia_config: default_lian_yi_xia_config(),
         }
     }
 }
@@ -692,4 +723,13 @@ pub fn default_lian_yi_xia_servers_config() -> LianYiXiaServersConfig {
     }
 }
 
+pub fn default_lian_yi_xia_port() -> u16 {
+    9000
+}
 
+pub fn default_lian_yi_xia_config() -> LianYiXiaConfig {
+    LianYiXiaConfig {
+        port: default_lian_yi_xia_port(),
+        ssh_tunnel: None,  // 默认不启用SSH隧道
+    }
+}

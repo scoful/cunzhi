@@ -131,3 +131,51 @@ pub fn build_continue_response(request_id: Option<String>, source: &str) -> Stri
     let response = build_mcp_response(Some(continue_prompt), vec![], vec![], request_id, source);
     response.to_string()
 }
+
+// ============================================================================
+// WebSocket 消息类型定义 (用于寸止客户端 <-> 连一下服务器通信)
+// ============================================================================
+
+/// 客户端注册消息
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegisterMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String, // "register"
+    pub client_id: String,
+}
+
+/// 注册成功响应
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegisterAck {
+    #[serde(rename = "type")]
+    pub msg_type: String, // "register_ack"
+    pub message: String,
+}
+
+/// 注册失败响应
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegisterError {
+    #[serde(rename = "type")]
+    pub msg_type: String, // "register_error"
+    pub error: String,
+}
+
+/// 弹窗请求消息 (服务器 -> 客户端)
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PopupRequestMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String, // "popup_request"
+    pub request_id: String,
+    pub message: String,
+    pub predefined_options: Option<Vec<String>>,
+    pub is_markdown: bool,
+}
+
+/// 弹窗响应消息 (客户端 -> 服务器)
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PopupResponseMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String, // "popup_response"
+    pub request_id: String,
+    pub response: String, // JSON格式的响应数据
+}

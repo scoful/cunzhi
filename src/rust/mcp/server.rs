@@ -10,8 +10,7 @@ use std::sync::Arc;
 
 use super::tools::{InteractionTool, MemoryTool};
 use super::types::{ZhiRequest, JiyiRequest};
-use super::ws_server::WsServer;
-use super::handlers::set_ws_server;
+use super::ws_client::{WsClient, WsClientConfig};
 use crate::config::load_standalone_config;
 use crate::{log_important, log_debug};
 
@@ -217,30 +216,29 @@ impl ServerHandler for ZhiServer {
 /// 启动MCP服务器
 pub async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     // 从环境变量加载WebSocket配置
-    let ws_config_opt = super::ws_server::WsServerConfig::from_env();
+    // 尝试启动WebSocket客户端(连接到"连一下")
+    let ws_client_config_opt = WsClientConfig::from_env();
 
-    // 只有配置了API Key才启动WebSocket服务器
-    if let Some(ws_config) = ws_config_opt {
-        let auth_status = if ws_config.api_key.is_some() { "已启用" } else { "未启用" };
-        log_important!(info, "WebSocket配置: {}:{}, 认证: {}",
-            ws_config.host, ws_config.port, auth_status
+    if let Some(ws_client_config) = ws_client_config_opt {
+        log_important!(info, "WebSocket客户端配置: {}:{}, CLIENT_ID: {}",
+            ws_client_config.host, ws_client_config.port, ws_client_config.client_id
         );
 
-        // 创建WebSocket服务器
-        let ws_server = Arc::new(WsServer::new(ws_config));
+        // 创建WebSocket客户端
+        let ws_client = Arc::new(WsClient::new(ws_client_config));
 
-        // 设置全局WebSocket服务器实例
-        set_ws_server(ws_server.clone());
+        // 设置全局WebSocket客户端实例(用于弹窗)
+        crate::mcp::handlers::popup::set_ws_client(ws_client.clone());
 
-        // 在后台启动WebSocket服务器
-        let ws_server_clone = ws_server.clone();
+        // 在后台启动WebSocket客户端
+        let ws_client_clone = ws_client.clone();
         tokio::spawn(async move {
-            if let Err(e) = ws_server_clone.start().await {
-                log_important!(error, "WebSocket服务器失败: {}", e);
+            if let Err(e) = ws_client_clone.start().await {
+                log_important!(warn, "WebSocket客户端连接失败(将使用本地模式): {}", e);
             }
         });
     } else {
-        log_important!(info, "WebSocket服务器未启用(需配置CUNZHI_WS_API_KEY)");
+        log_important!(info, "WebSocket客户端未配置,使用本地模式");
     }
 
     // 创建并运行MCP服务器

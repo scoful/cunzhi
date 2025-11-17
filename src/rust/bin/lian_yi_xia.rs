@@ -4,90 +4,78 @@
 
 use cunzhi::utils::auto_init_logger;
 use cunzhi::log_important;
-use cunzhi::lian_yi_xia::{LianYiXiaState, WebSocketServerConfig, WebSocketServersConfig};
+use cunzhi::lian_yi_xia::LianYiXiaState;
 use cunzhi::config::{AppState, storage::load_config};
-use tauri::{State, Manager, LogicalSize, AppHandle, WindowEvent};
+use tauri::{Manager, LogicalSize, AppHandle, WindowEvent};
 use anyhow::Result;
 use tauri::Builder;
 
 // Wrapper commands in bin crate so generate_handler! resolves within this crate
 #[tauri::command]
-async fn get_lian_yi_xia_app_info() -> Result<String, String> {
-    cunzhi::lian_yi_xia::get_lian_yi_xia_app_info().await
+fn get_lian_yi_xia_app_info() -> String {
+    cunzhi::lian_yi_xia::get_lian_yi_xia_app_info()
+}
+
+// 新架构命令
+#[tauri::command]
+async fn get_connected_clients() -> Result<Vec<cunzhi::lian_yi_xia::ConnectedClient>, String> {
+    cunzhi::lian_yi_xia::get_connected_clients().await
 }
 
 #[tauri::command]
-async fn get_websocket_servers(state: State<'_, LianYiXiaState>) -> Result<WebSocketServersConfig, String> {
-    cunzhi::lian_yi_xia::get_websocket_servers(state).await
+async fn get_ws_server_status() -> Result<cunzhi::lian_yi_xia::WsServerStatus, String> {
+    cunzhi::lian_yi_xia::get_ws_server_status().await
 }
 
 #[tauri::command]
-async fn add_websocket_server(
-    name: String,
-    host: String,
-    port: u16,
-    api_key: String,
-    enabled: bool,
-    auto_connect: bool,
-    lian_yi_xia_state: State<'_, LianYiXiaState>,
-    app_state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<String, String> {
-    cunzhi::lian_yi_xia::add_websocket_server(name, host, port, api_key, enabled, auto_connect, lian_yi_xia_state, app_state, app).await
+async fn get_ws_server_port() -> Result<u16, String> {
+    cunzhi::lian_yi_xia::get_ws_server_port().await
 }
 
 #[tauri::command]
-async fn update_websocket_server(
-    server_config: WebSocketServerConfig,
-    lian_yi_xia_state: State<'_, LianYiXiaState>,
-    app_state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
-    cunzhi::lian_yi_xia::update_websocket_server(server_config, lian_yi_xia_state, app_state, app).await
+async fn save_ws_server_port(port: u16) -> Result<(), String> {
+    cunzhi::lian_yi_xia::save_ws_server_port(port).await
+}
+
+// SSH隧道管理命令
+#[tauri::command]
+async fn get_ssh_tunnel_config(app: AppHandle) -> Result<Option<cunzhi::config::settings::SshTunnelConfig>, String> {
+    cunzhi::lian_yi_xia::get_ssh_tunnel_config(app).await
 }
 
 #[tauri::command]
-async fn delete_websocket_server(
-    server_id: String,
-    lian_yi_xia_state: State<'_, LianYiXiaState>,
-    app_state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
-    cunzhi::lian_yi_xia::delete_websocket_server(server_id, lian_yi_xia_state, app_state, app).await
+async fn update_ssh_tunnel_config(app: AppHandle, ssh_config: Option<cunzhi::config::settings::SshTunnelConfig>) -> Result<(), String> {
+    cunzhi::lian_yi_xia::update_ssh_tunnel_config(app, ssh_config).await
 }
 
 #[tauri::command]
-async fn generate_api_key() -> Result<String, String> {
-    cunzhi::lian_yi_xia::generate_api_key().await
+async fn update_ws_server_port(app: AppHandle, port: u16) -> Result<(), String> {
+    cunzhi::lian_yi_xia::update_ws_server_port(app, port).await
 }
 
 #[tauri::command]
-async fn connect_to_server(server_id: String) -> Result<(), String> {
-    cunzhi::lian_yi_xia::connect_to_server(server_id).await
+async fn start_ssh_tunnel() -> Result<(), String> {
+    cunzhi::lian_yi_xia::start_ssh_tunnel().await
 }
 
 #[tauri::command]
-async fn disconnect_from_server(server_id: String) -> Result<(), String> {
-    cunzhi::lian_yi_xia::disconnect_from_server(server_id).await
+async fn stop_ssh_tunnel() -> Result<(), String> {
+    cunzhi::lian_yi_xia::stop_ssh_tunnel().await
 }
 
 #[tauri::command]
-async fn get_server_connection_status(server_id: String) -> Result<cunzhi::lian_yi_xia::ConnectionStatus, String> {
-    cunzhi::lian_yi_xia::get_server_connection_status(server_id).await
+async fn restart_ssh_tunnel() -> Result<(), String> {
+    cunzhi::lian_yi_xia::restart_ssh_tunnel().await
 }
 
 #[tauri::command]
-async fn get_all_connection_status() -> Result<std::collections::HashMap<String, cunzhi::lian_yi_xia::ConnectionStatus>, String> {
-    cunzhi::lian_yi_xia::get_all_connection_status().await
+async fn get_ssh_tunnel_status() -> Result<String, String> {
+    cunzhi::lian_yi_xia::get_ssh_tunnel_status().await
 }
 
 #[tauri::command]
-async fn reload_servers_from_config(
-    app_state: tauri::State<'_, AppState>,
-    lian_yi_xia_state: tauri::State<'_, LianYiXiaState>,
-    app: AppHandle,
-) -> Result<Vec<cunzhi::lian_yi_xia::WebSocketServerConfig>, String> {
-    cunzhi::lian_yi_xia::reload_servers_from_config(app_state, lian_yi_xia_state, app).await
+async fn get_ssh_tunnel_command() -> Result<Option<String>, String> {
+    cunzhi::lian_yi_xia::get_ssh_tunnel_command().await
 }
 
 /// 设置"连一下"窗口事件监听器
@@ -106,10 +94,11 @@ fn setup_lian_yi_xia_window_events(app_handle: &AppHandle) {
                 tauri::async_runtime::spawn(async move {
                     log_important!(info, "🖱️ 连一下窗口关闭按钮被点击");
 
-                    // 断开所有WebSocket连接
-                    let manager = cunzhi::lian_yi_xia::get_ws_manager();
-                    if let Err(e) = manager.disconnect_all().await {
-                        log_important!(warn, "断开WebSocket连接失败: {}", e);
+                    // 新架构: 停止SSH隧道(如果有)
+                    if let Some(ssh_manager) = cunzhi::lian_yi_xia::get_ssh_tunnel_manager() {
+                        if let Err(e) = ssh_manager.stop().await {
+                            log_important!(warn, "停止SSH隧道失败: {}", e);
+                        }
                     }
 
                     // 关闭窗口
@@ -131,64 +120,107 @@ fn setup_lian_yi_xia_window_events(app_handle: &AppHandle) {
 /// 构建"连一下"Tauri应用
 pub fn build_lian_yi_xia_app() -> Builder<tauri::Wry> {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(LianYiXiaState::default())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_lian_yi_xia_app_info,
-            get_websocket_servers,
-            add_websocket_server,
-            update_websocket_server,
-            delete_websocket_server,
-            generate_api_key,
-            connect_to_server,
-            disconnect_from_server,
-            get_server_connection_status,
-            get_all_connection_status,
-            reload_servers_from_config,
+            // 新架构命令
+            get_connected_clients,
+            get_ws_server_status,
+            get_ws_server_port,
+            save_ws_server_port,
+            // SSH隧道管理命令
+            get_ssh_tunnel_config,
+            update_ssh_tunnel_config,
+            update_ws_server_port,
+            start_ssh_tunnel,
+            stop_ssh_tunnel,
+            restart_ssh_tunnel,
+            get_ssh_tunnel_status,
+            get_ssh_tunnel_command,
         ])
         .setup(|app| {
             // 设置全局AppHandle(用于WebSocket日志事件)
             cunzhi::lian_yi_xia::set_app_handle(app.handle().clone());
 
+            // 启动WebSocket服务器
+            {
+                use std::sync::Arc;
+                let ws_server = Arc::new(cunzhi::lian_yi_xia::ws_server::LianYiXiaWsServer::new());
+
+                // 保存全局实例
+                cunzhi::lian_yi_xia::set_ws_server(ws_server.clone());
+
+                // 启动服务器
+                tauri::async_runtime::spawn(async move {
+                    log_important!(info, "正在启动WebSocket服务器...");
+                    if let Err(e) = ws_server.start().await {
+                        log_important!(error, "WebSocket服务器启动失败: {}", e);
+                    }
+                });
+            }
+
+            // 初始化SSH隧道管理器
+            {
+                use std::sync::Arc;
+
+                // 从配置读取端口
+                let app_state = app.state::<AppState>();
+                let port = {
+                    let config = app_state.config.lock().ok();
+                    config.map(|c| c.lian_yi_xia_config.port).unwrap_or(9000)
+                };
+
+                let ssh_manager = Arc::new(cunzhi::lian_yi_xia::ssh_tunnel_manager::SshTunnelManager::new(port));
+
+                // 保存全局实例
+                cunzhi::lian_yi_xia::set_ssh_tunnel_manager(ssh_manager.clone());
+
+                log_important!(info, "SSH隧道管理器已初始化");
+            }
+
             // 加载配置并应用窗口设置
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let app_state = app_handle.state::<AppState>();
-                let lian_yi_xia_state = app_handle.state::<LianYiXiaState>();
 
                 // 加载配置
                 if let Err(e) = load_config(&app_state, &app_handle).await {
                     log_important!(warn, "加载配置失败: {}", e);
                 }
 
-                // 从配置文件加载服务器配置到运行时状态
-                let servers_to_add = {
-                    let config = app_state.config.lock().map_err(|e| anyhow::anyhow!("获取配置失败: {}", e)).ok()?;
-                    let mut lian_yi_xia_config = lian_yi_xia_state.servers_config.lock().ok()?;
-
-                    // 将配置文件中的服务器配置转换为运行时配置
-                    lian_yi_xia_config.servers = config.lian_yi_xia_servers_config.servers.iter().map(|s| {
-                        WebSocketServerConfig {
-                            id: s.id.clone(),
-                            name: s.name.clone(),
-                            host: s.host.clone(),
-                            port: s.port,
-                            api_key: s.api_key.clone(),
-                            enabled: s.enabled,
-                            auto_connect: s.auto_connect,
+                // 加载SSH隧道配置并自动启动
+                {
+                    // 先获取配置数据,然后立即释放锁
+                    let (ssh_config, port) = {
+                        let config = app_state.config.lock().ok();
+                        if let Some(config) = config {
+                            (
+                                config.lian_yi_xia_config.ssh_tunnel.clone(),
+                                config.lian_yi_xia_config.port,
+                            )
+                        } else {
+                            (None, 9000)
                         }
-                    }).collect();
+                    };
 
-                    log_important!(info, "已加载 {} 个WebSocket服务器配置", lian_yi_xia_config.servers.len());
+                    // 更新SSH隧道管理器配置
+                    if let Some(manager) = cunzhi::lian_yi_xia::get_ssh_tunnel_manager() {
+                        manager.update_config(ssh_config.clone()).await;
+                        manager.update_port(port).await;
 
-                    // 克隆服务器配置列表，在锁外使用
-                    lian_yi_xia_config.servers.clone()
-                };
-
-                // 将服务器配置添加到WebSocket管理器并尝试自动连接（在锁外执行）
-                for server_config in servers_to_add {
-                    if let Err(e) = cunzhi::lian_yi_xia::get_ws_manager().add_server_with_auto_connect(server_config.clone()).await {
-                        log::warn!("添加服务器到管理器失败: {} - {}", server_config.name, e);
+                        // 如果配置了SSH隧道且启用了auto_start,则自动启动
+                        if let Some(ssh_cfg) = ssh_config {
+                            if ssh_cfg.enabled && ssh_cfg.auto_start {
+                                log_important!(info, "自动启动SSH隧道...");
+                                if let Err(e) = manager.start().await {
+                                    log_important!(error, "自动启动SSH隧道失败: {}", e);
+                                } else {
+                                    log_important!(info, "SSH隧道已自动启动");
+                                }
+                            }
+                        }
                     }
                 }
 

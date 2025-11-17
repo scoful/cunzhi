@@ -5,6 +5,7 @@ pub mod types;
 pub mod handlers;
 pub mod utils;
 pub mod ws_server;
+pub mod ws_client;
 
 pub use commands::*;
 pub use server::*;
@@ -13,3 +14,4 @@ pub use types::*;
 pub use handlers::*;
 pub use utils::*;
 pub use ws_server::*;
+pub use ws_client::*;
