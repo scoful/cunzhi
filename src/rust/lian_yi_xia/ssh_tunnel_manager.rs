@@ -12,10 +12,6 @@ use tauri::Emitter;
 use crate::config::settings::SshTunnelConfig;
 use crate::log_important;
 
-// Windows平台特定: 用于隐藏控制台窗口
-#[cfg(windows)]
-
-
 /// SSH隧道状态
 #[derive(Debug, Clone, PartialEq)]
 pub enum TunnelStatus {
