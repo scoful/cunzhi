@@ -19,10 +19,8 @@ pub struct AppConfig {
     pub custom_prompt_config: CustomPromptConfig, // 自定义prompt配置
     #[serde(default = "default_shortcut_config")]
     pub shortcut_config: ShortcutConfig, // 自定义快捷键配置
-    #[serde(default = "default_lian_yi_xia_servers_config")]
-    pub lian_yi_xia_servers_config: LianYiXiaServersConfig, // "连一下"服务器配置(旧架构)
     #[serde(default = "default_lian_yi_xia_config")]
-    pub lian_yi_xia_config: LianYiXiaConfig, // "连一下"应用配置(新架构)
+    pub lian_yi_xia_config: LianYiXiaConfig, // "连一下"应用配置
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -188,25 +186,7 @@ pub struct TelegramConfig {
     pub api_base_url: String, // Telegram API基础URL
 }
 
-/// "连一下"WebSocket服务器配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LianYiXiaServerConfig {
-    pub id: String,           // 唯一标识
-    pub name: String,         // 显示名称
-    pub host: String,         // 服务器地址
-    pub port: u16,            // 服务器端口
-    pub api_key: String,      // API密钥
-    pub enabled: bool,        // 是否启用
-    pub auto_connect: bool,   // 是否自动连接
-}
-
-/// "连一下"多服务器配置
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct LianYiXiaServersConfig {
-    pub servers: Vec<LianYiXiaServerConfig>,
-}
-
-/// "连一下"应用配置 (新架构)
+/// "连一下"应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LianYiXiaConfig {
     #[serde(default = "default_lian_yi_xia_port")]
@@ -253,7 +233,6 @@ impl Default for AppConfig {
             telegram_config: default_telegram_config(),
             custom_prompt_config: default_custom_prompt_config(),
             shortcut_config: default_shortcut_config(),
-            lian_yi_xia_servers_config: default_lian_yi_xia_servers_config(),
             lian_yi_xia_config: default_lian_yi_xia_config(),
         }
     }
@@ -715,12 +694,6 @@ pub fn default_shortcuts() -> HashMap<String, ShortcutBinding> {
     });
 
     shortcuts
-}
-
-pub fn default_lian_yi_xia_servers_config() -> LianYiXiaServersConfig {
-    LianYiXiaServersConfig {
-        servers: Vec::new(),
-    }
 }
 
 pub fn default_lian_yi_xia_port() -> u16 {

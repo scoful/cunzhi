@@ -6,31 +6,22 @@ use std::sync::Arc;
 use once_cell::sync::OnceCell;
 
 use crate::mcp::types::PopupRequest;
-use crate::mcp::ws_server::WsServer;
 use crate::mcp::ws_client::WsClient;
 use crate::log_important;
 
-/// 全局WebSocket服务器实例(旧架构)
-static WS_SERVER: OnceCell<Arc<WsServer>> = OnceCell::new();
-
-/// 全局WebSocket客户端实例(新架构)
+/// 全局WebSocket客户端实例
 static WS_CLIENT: OnceCell<Arc<WsClient>> = OnceCell::new();
 
-/// 设置全局WebSocket服务器实例(旧架构)
-pub fn set_ws_server(server: Arc<WsServer>) {
-    let _ = WS_SERVER.set(server);
-}
-
-/// 设置全局WebSocket客户端实例(新架构)
+/// 设置全局WebSocket客户端实例
 pub fn set_ws_client(client: Arc<WsClient>) {
     let _ = WS_CLIENT.set(client);
 }
 
 /// 创建 Tauri 弹窗
 ///
-/// 优先使用WebSocket推送,失败时fallback到本地进程调用
+/// 优先使用WebSocket客户端推送,失败时fallback到本地进程调用
 pub async fn create_tauri_popup(request: &PopupRequest) -> Result<String> {
-    // 1. 优先尝试WebSocket客户端(新架构)
+    // 1. 优先尝试WebSocket客户端
     if let Some(ws_client) = WS_CLIENT.get() {
         if ws_client.is_connected().await {
             log_important!(info, "使用WebSocket客户端发送弹窗请求");
@@ -46,25 +37,7 @@ pub async fn create_tauri_popup(request: &PopupRequest) -> Result<String> {
         }
     }
 
-    // 2. 尝试WebSocket服务器(旧架构)
-    if let Some(ws_server) = WS_SERVER.get() {
-        let has_clients = ws_server.has_clients().await;
-
-        if has_clients {
-            log_important!(info, "使用WebSocket服务器推送弹窗请求");
-            match ws_server.send_popup_request(request).await {
-                Ok(response) => {
-                    log_important!(info, "WebSocket响应成功");
-                    return Ok(response);
-                }
-                Err(e) => {
-                    log_important!(warn, "WebSocket服务器推送失败,fallback到本地进程: {}", e);
-                }
-            }
-        }
-    }
-
-    // 3. Fallback到本地进程调用
+    // 2. Fallback到本地进程调用
     log_important!(info, "使用本地进程调用弹窗");
     create_local_popup(request)
 }
