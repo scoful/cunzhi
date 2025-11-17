@@ -113,6 +113,11 @@ impl WsClient {
     }
 
     /// 启动WebSocket客户端(带重试机制)
+    ///
+    /// 重试策略:
+    /// - Linux: 无限重试 (连接失败或断开都会重试)
+    /// - Windows/macOS: 重试3次后fallback到本地模式
+    /// - 环境变量 CUNZHI_WS_MAX_RETRIES 可以覆盖默认值
     pub async fn start_with_retry(self: Arc<Self>) {
         let mut retry_count = 0;
         let max_retries = Self::get_max_retries();
@@ -121,10 +126,32 @@ impl WsClient {
         loop {
             match self.clone().start().await {
                 Ok(_) => {
-                    log_important!(info, "WebSocket客户端连接成功");
-                    break;
+                    // 连接成功后断开,继续重试
+                    retry_count += 1;
+
+                    if retry_count >= max_retries {
+                        log_important!(warn,
+                            "WebSocket客户端断开,已达最大重试次数({}次),将使用本地模式",
+                            max_retries
+                        );
+                        break;
+                    }
+
+                    let retry_display = if max_retries == u32::MAX {
+                        format!("{}/∞", retry_count)
+                    } else {
+                        format!("{}/{}", retry_count, max_retries)
+                    };
+
+                    log_important!(warn,
+                        "WebSocket客户端断开({}),{}秒后重连",
+                        retry_display, retry_interval.as_secs()
+                    );
+
+                    tokio::time::sleep(retry_interval).await;
                 }
                 Err(e) => {
+                    // 连接失败,继续重试
                     retry_count += 1;
 
                     if retry_count >= max_retries {
