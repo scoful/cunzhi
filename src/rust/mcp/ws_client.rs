@@ -88,8 +88,72 @@ impl WsClient {
         }
     }
 
+    /// 获取最大重试次数
+    ///
+    /// 优先级:
+    /// 1. 环境变量 CUNZHI_WS_MAX_RETRIES (可以是数字或"infinite")
+    /// 2. 默认值: Linux无限重试, Windows/macOS重试3次
+    fn get_max_retries() -> u32 {
+        // 1. 优先使用环境变量
+        if let Ok(retries) = std::env::var("CUNZHI_WS_MAX_RETRIES") {
+            if retries == "infinite" || retries == "∞" {
+                return u32::MAX;
+            }
+            if let Ok(n) = retries.parse() {
+                return n;
+            }
+        }
+
+        // 2. 默认: Linux无限重试,其他平台3次
+        #[cfg(target_os = "linux")]
+        return u32::MAX;
+
+        #[cfg(not(target_os = "linux"))]
+        return 3;
+    }
+
+    /// 启动WebSocket客户端(带重试机制)
+    pub async fn start_with_retry(self: Arc<Self>) {
+        let mut retry_count = 0;
+        let max_retries = Self::get_max_retries();
+        let retry_interval = Duration::from_secs(5);
+
+        loop {
+            match self.clone().start().await {
+                Ok(_) => {
+                    log_important!(info, "WebSocket客户端连接成功");
+                    break;
+                }
+                Err(e) => {
+                    retry_count += 1;
+
+                    if retry_count >= max_retries {
+                        log_important!(warn,
+                            "WebSocket客户端连接失败,已达最大重试次数({}次),将使用本地模式: {}",
+                            max_retries, e
+                        );
+                        break;
+                    }
+
+                    let retry_display = if max_retries == u32::MAX {
+                        format!("{}/∞", retry_count)
+                    } else {
+                        format!("{}/{}", retry_count, max_retries)
+                    };
+
+                    log_important!(warn,
+                        "WebSocket客户端连接失败({}): {}, {}秒后重试",
+                        retry_display, e, retry_interval.as_secs()
+                    );
+
+                    tokio::time::sleep(retry_interval).await;
+                }
+            }
+        }
+    }
+
     /// 启动WebSocket客户端(连接并注册)
-    pub async fn start(self: Arc<Self>) -> Result<()> {
+    async fn start(self: Arc<Self>) -> Result<()> {
         // 设置状态为连接中
         {
             let mut status = self.status.lock().await;

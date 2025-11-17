@@ -230,12 +230,10 @@ pub async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
         // 设置全局WebSocket客户端实例(用于弹窗)
         crate::mcp::handlers::popup::set_ws_client(ws_client.clone());
 
-        // 在后台启动WebSocket客户端
+        // 在后台启动WebSocket客户端(带重试机制)
         let ws_client_clone = ws_client.clone();
         tokio::spawn(async move {
-            if let Err(e) = ws_client_clone.start().await {
-                log_important!(warn, "WebSocket客户端连接失败(将使用本地模式): {}", e);
-            }
+            ws_client_clone.start_with_retry().await;
         });
     } else {
         log_important!(info, "WebSocket客户端未配置,使用本地模式");
