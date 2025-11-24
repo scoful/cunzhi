@@ -406,20 +406,14 @@ impl WsClient {
             }
         }
 
-        // 等待响应(30秒超时)
-        match tokio::time::timeout(Duration::from_secs(30), rx).await {
-            Ok(Ok(response)) => {
+        // 等待响应(永不超时,一直等待直到收到响应)
+        match rx.await {
+            Ok(response) => {
                 log_important!(info, "收到弹窗响应: {}", request_id);
                 Ok(response)
             }
-            Ok(Err(_)) => {
-                anyhow::bail!("响应channel已关闭");
-            }
             Err(_) => {
-                // 超时,清理pending request
-                let mut pending = self.pending_requests.lock().await;
-                pending.remove(&request_id);
-                anyhow::bail!("弹窗请求超时");
+                anyhow::bail!("响应channel已关闭");
             }
         }
     }

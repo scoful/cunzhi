@@ -85,3 +85,4 @@ scripts/
 
 *.code-workspace
 dist*/
+.claude/
